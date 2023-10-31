@@ -82,7 +82,7 @@ class DnsPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "designate-channel": "2023.2/edge",
+            "designate-channel": "2023.2/candidate",
             "enable-designate": True,
             "nameservers": self.nameservers,
         }

@@ -164,6 +164,7 @@ parts:
     source: https://github.com/canonical/sunbeam-terraform
     source-depth: 1
     source-type: git
+    source-branch: stable/2023.2
     organize:
       '*': etc/deploy-openstack/
     override-build: |

@@ -273,7 +273,7 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.2/candidate",
         }
 
     def set_tfvars_on_disable(self) -> dict:
