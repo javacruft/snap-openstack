@@ -94,8 +94,8 @@ def determine_target_topology(client: Client) -> str:
     return topology
 
 
-def compute_ha_scale(topology: str) -> int:
-    if topology == "single":
+def compute_ha_scale(topology: str, control_nodes: int) -> int:
+    if topology == "single" or control_nodes < 3:
         return 1
     return 3
 
@@ -324,16 +324,22 @@ class ResizeControlPlaneStep(BaseStep, JujuStepHelper):
         tf_vars = read_config(client, self._CONFIG)
         control_nodes = client.cluster.list_nodes_by_role("control")
         storage_nodes = client.cluster.list_nodes_by_role("storage")
+        # NOTE(jamespage)
+        # When dedicated control nodes are used, ceph is not enabled during
+        # bootstrap - however storage nodes may be added later so re-assess
         tf_vars.update(
             {
-                "ha-scale": compute_ha_scale(topology),
+                "ha-scale": compute_ha_scale(topology, len(control_nodes)),
                 "os-api-scale": compute_os_api_scale(topology, len(control_nodes)),
                 "ingress-scale": compute_ingress_scale(topology, len(control_nodes)),
                 "ceph-osd-replication-count": compute_ceph_replica_scale(
                     topology, len(storage_nodes)
                 ),
+                "enable-ceph": len(storage_nodes) > 0,
+                "ceph-offer-url": f"{CONTROLLER_MODEL}.{MICROCEPH_APPLICATION}",
             }
         )
+
         update_config(client, self._CONFIG, tf_vars)
         self.update_status(status, "scaling services")
         self.tfhelper.write_tfvars(tf_vars)

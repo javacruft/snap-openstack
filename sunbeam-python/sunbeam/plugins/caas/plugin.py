@@ -100,11 +100,15 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         return {
             "magnum-channel": "2023.2/candidate",
             "enable-magnum": True,
+            **self.add_horizon_plugin_to_tfvars("magnum"),
         }
 
     def set_tfvars_on_disable(self) -> dict:
         """Set terraform variables to disable the application."""
-        return {"enable-magnum": False}
+        return {
+            "enable-magnum": False,
+            **self.remove_horizon_plugin_from_tfvars("magnum"),
+        }
 
     def set_tfvars_on_resize(self) -> dict:
         """Set terraform variables to resize the application."""

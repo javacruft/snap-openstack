@@ -48,11 +48,15 @@ class LoadbalancerPlugin(OpenStackControlPlanePlugin):
         return {
             "octavia-channel": "2023.2/candidate",
             "enable-octavia": True,
+            **self.add_horizon_plugin_to_tfvars("octavia"),
         }
 
     def set_tfvars_on_disable(self) -> dict:
         """Set terraform variables to disable the application."""
-        return {"enable-octavia": False}
+        return {
+            "enable-octavia": False,
+            **self.remove_horizon_plugin_from_tfvars("octavia"),
+        }
 
     def set_tfvars_on_resize(self) -> dict:
         """Set terraform variables to resize the application."""

@@ -246,6 +246,41 @@ class TerraformHelper:
             LOG.warning(e.stderr)
             raise TerraformException(str(e))
 
+    def output(self) -> dict:
+        """terraform output"""
+        os_env = os.environ.copy()
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        tf_log = str(self.path / f"terraform-output-{timestamp}.log")
+        os_env.update({"TF_LOG_PATH": tf_log})
+        os_env.setdefault("TF_LOG", "INFO")
+        if self.env:
+            os_env.update(self.env)
+        if self.data_location:
+            os_env.update(self.update_juju_provider_credentials())
+
+        try:
+            cmd = [self.terraform, "output", "-json", "-no-color"]
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.path,
+                env=os_env,
+            )
+            stdout = process.stdout
+            LOG.debug(f"Command finished. stdout={stdout}, stderr={process.stderr}")
+            tf_output = json.loads(stdout)
+            output = {}
+            for key, value in tf_output.items():
+                output[key] = value["value"]
+            return output
+        except subprocess.CalledProcessError as e:
+            LOG.error(f"terraform output failed: {e.output}")
+            LOG.warning(e.stderr)
+            raise TerraformException(str(e))
+
 
 class TerraformInitStep(BaseStep):
     """Initialize Terraform with required providers."""
