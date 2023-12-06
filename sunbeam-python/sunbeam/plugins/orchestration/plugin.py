@@ -46,7 +46,7 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "heat-channel": "2023.2/candidate",
+            "heat-channel": "2023.2/stable",
             "enable-heat": True,
             **self.add_horizon_plugin_to_tfvars("heat"),
         }

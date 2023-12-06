@@ -129,7 +129,7 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "telemetry-channel": "2023.2/candidate",
+            "telemetry-channel": "2023.2/stable",
             "enable-telemetry": True,
             **self._get_observability_offer_endpoints(),
         }
