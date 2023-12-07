@@ -108,7 +108,7 @@ class TestAddLDAPDomainStep:
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {
-                "ldap-channel": "2023.2/edge",
+                "ldap-channel": "2023.1/edge",
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
@@ -121,7 +121,7 @@ class TestAddLDAPDomainStep:
     def test_enable_second_domain(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = AddLDAPDomainStep(
@@ -130,7 +130,7 @@ class TestAddLDAPDomainStep:
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {
-                "ldap-channel": "2023.2/edge",
+                "ldap-channel": "2023.1/edge",
                 "ldap-apps": {
                     "dom1": {"domain-name": "dom1"},
                     "dom2": {"domain-name": "dom2"},
@@ -165,7 +165,7 @@ class TestAddLDAPDomainStep:
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {
-                "ldap-channel": "2023.2/edge",
+                "ldap-channel": "2023.1/edge",
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
@@ -197,13 +197,13 @@ class TestDisableLDAPDomainStep:
     def test_disable(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
         step.run()
         self.tfhelper.write_tfvars.assert_called_with(
-            {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
+            {"ldap-channel": "2023.1/edge", "ldap-apps": {}}
         )
         self.tfhelper.apply.assert_called_once_with()
 
@@ -211,13 +211,13 @@ class TestDisableLDAPDomainStep:
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom1")
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
-            {"ldap-channel": "2023.2/edge", "ldap-apps": {}}
+            {"ldap-channel": "2023.1/edge", "ldap-apps": {}}
         )
         self.tfhelper.apply.assert_called_once_with()
         assert result.result_type == ResultType.FAILED
@@ -226,7 +226,7 @@ class TestDisableLDAPDomainStep:
     def test_disable_wrong_domain(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = DisableLDAPDomainStep(self.tfhelper, self.jhelper, self.plugin, "dom2")
@@ -259,7 +259,7 @@ class TestUpdateLDAPDomainStep:
     def test_update_domain(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
@@ -268,7 +268,7 @@ class TestUpdateLDAPDomainStep:
         result = step.run()
         self.tfhelper.write_tfvars.assert_called_with(
             {
-                "ldap-channel": "2023.2/edge",
+                "ldap-channel": "2023.1/edge",
                 "ldap-apps": {"dom1": {"domain-name": "dom1"}},
             }
         )
@@ -281,7 +281,7 @@ class TestUpdateLDAPDomainStep:
     def test_update_wrong_domain(self, cclient, read_config, update_config, snap):
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
@@ -295,7 +295,7 @@ class TestUpdateLDAPDomainStep:
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(
@@ -311,7 +311,7 @@ class TestUpdateLDAPDomainStep:
         self.tfhelper.apply.side_effect = TerraformException("apply failed...")
         self.plugin = FakeLDAPPlugin()
         read_config.return_value = {
-            "ldap-channel": "2023.2/edge",
+            "ldap-channel": "2023.1/edge",
             "ldap-apps": {"dom1": {"domain-name": "dom1"}},
         }
         step = UpdateLDAPDomainStep(

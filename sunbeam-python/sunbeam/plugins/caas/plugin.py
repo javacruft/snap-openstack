@@ -98,7 +98,7 @@ class CaasPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "magnum-channel": "2023.2/stable",
+            "magnum-channel": "2023.1/edge",
             "enable-magnum": True,
             **self.add_horizon_plugin_to_tfvars("magnum"),
         }

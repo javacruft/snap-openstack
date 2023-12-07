@@ -46,7 +46,7 @@ class LoadbalancerPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "octavia-channel": "2023.2/stable",
+            "octavia-channel": "2023.1/edge",
             "enable-octavia": True,
             **self.add_horizon_plugin_to_tfvars("octavia"),
         }

@@ -49,7 +49,7 @@ class SecretsPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to enable the application."""
         return {
             "enable-barbican": True,
-            "barbican-channel": "2023.2/stable",
+            "barbican-channel": "2023.1/edge",
         }
 
     def set_tfvars_on_disable(self) -> dict:
