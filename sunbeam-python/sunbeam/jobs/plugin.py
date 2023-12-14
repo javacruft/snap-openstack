@@ -17,7 +17,7 @@ import importlib
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import click
 import yaml
@@ -29,7 +29,6 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
 )
 from sunbeam.jobs.common import read_config
-from sunbeam.plugins.interface.v1.base import BasePlugin
 
 LOG = logging.getLogger(__name__)
 PLUGIN_YAML = "plugins.yaml"
@@ -56,35 +55,38 @@ class PluginManager:
         return Path(__file__).parent.parent / "plugins"
 
     @classmethod
-    def get_plugin_classes(
-        cls, plugin_file: Path, raise_exception: bool = False
-    ) -> list:
-        """Return list of plugin classes from plugin yaml.
+    def get_plugins_map(
+        cls,
+        plugin_file: Path,
+        raise_exception: bool = False,
+    ) -> Dict[str, type]:
+        """Return dict of {plugin name: plugin class} from plugin yaml.
 
         :param plugin_file: Plugin yaml file
         :param raise_exception: If set to true, raises an exception in case
                                 plugin class is not loaded. By default, ignores
                                 by logging the error message.
 
-        :returns: List of plugin classes
+        :returns: Dict of plugin classes
         :raises: ModuleNotFoundError or AttributeError
         """
         plugins_yaml = {}
         with plugin_file.open() as file:
             plugins_yaml = yaml.safe_load(file)
 
-        plugins = plugins_yaml.get("sunbeam-plugins", {}).get("plugins", {})
-        plugin_classes_str = [
-            plugin.get("path") for plugin in plugins if plugin.get("path")
-        ]
+        plugins = plugins_yaml.get("sunbeam-plugins", {}).get("plugins", [])
+        plugin_classes = {}
 
-        plugin_classes = []
-        for plugin_class in plugin_classes_str:
+        for plugin in plugins:
+            module = None
+            plugin_class = plugin.get("path")
+            if plugin_class is None:
+                continue
             module_class_ = plugin_class.rsplit(".", 1)
             try:
                 module = importlib.import_module(module_class_[0])
                 plugin_class = getattr(module, module_class_[1])
-                plugin_classes.append(plugin_class)
+                plugin_classes[plugin["name"]] = plugin_class
             # Catching Exception instead of specific errors as plugins
             # can raise any exception based on implementation.
             except Exception as e:
@@ -99,6 +101,33 @@ class PluginManager:
 
         LOG.debug(f"Plugin classes: {plugin_classes}")
         return plugin_classes
+
+    @classmethod
+    def get_plugin_classes(
+        cls, plugin_file: Path, raise_exception: bool = False
+    ) -> List[type]:
+        """Return a list of plugin classes from plugin yaml.
+
+        :param plugin_file: Plugin yaml file
+        :param raise_exception: If set to true, raises an exception in case
+                                plugin class is not loaded. By default, ignores
+                                by logging the error message.
+
+        :returns: List of plugin classes
+        :raises: ModuleNotFoundError or AttributeError
+        """
+        return list(cls.get_plugins_map(plugin_file, raise_exception).values())
+
+    @classmethod
+    def get_all_plugin_classes(cls) -> List[type]:
+        """Return a lsit of plugin classes from all repositories."""
+        core_plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
+        plugins = cls.get_plugin_classes(core_plugin_file)
+        for path in cls.get_external_plugins_base_path().glob("*"):
+            if not path.is_dir():
+                continue
+            plugins.extend(cls.get_plugin_classes(path / PLUGIN_YAML))
+        return plugins
 
     @classmethod
     def get_all_external_repos(cls, detail: bool = False) -> list:
@@ -256,7 +285,21 @@ class PluginManager:
                 plugin().register(cli)
 
     @classmethod
-    def is_plugin_version_changed(cls, plugin: BasePlugin) -> bool:
+    def resolve_plugin(cls, repo: str, plugin: str) -> Optional[type]:
+        """Resolve a plugin name to a class.
+
+        Lookup core and external plugins to find a plugin with the given name.
+        """
+        if repo == "core":
+            plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
+        else:
+            plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
+        plugins = cls.get_plugins_map(plugin_file)
+
+        return plugins.get(plugin)
+
+    @classmethod
+    def is_plugin_version_changed(cls, plugin) -> bool:
         """Check if plugin version is changed.
 
         Compare the plugin version in the database and the newly loaded one
@@ -266,6 +309,8 @@ class PluginManager:
         :returns: True if versions are different.
         """
         LOG.debug("In plugin version changed check")
+        if not hasattr(plugin, "get_plugin_info") or not hasattr(plugin, "version"):
+            raise AttributeError("Plugin is not a valid plugin class")
         return not plugin.get_plugin_info().get("version", "0.0.0") == str(
             plugin.version
         )

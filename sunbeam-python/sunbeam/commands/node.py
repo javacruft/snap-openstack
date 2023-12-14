@@ -118,6 +118,7 @@ def add(name: str, format: str) -> None:
     jhelper = JujuHelper(data_location)
 
     plan1 = [
+        JujuLoginStep(data_location),
         ClusterAddNodeStep(name),
         CreateJujuUserStep(name),
         JujuGrantModelAccessStep(jhelper, name, OPENSTACK_MODEL),

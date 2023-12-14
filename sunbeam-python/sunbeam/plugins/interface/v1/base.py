@@ -14,20 +14,52 @@
 # limitations under the License.
 
 
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Literal, Type, Union
 
 import click
+from packaging.requirements import Requirement
 from packaging.version import Version
 from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.jobs.common import read_config, update_config
+from sunbeam.jobs.plugin import PluginManager
 from sunbeam.plugins.interface import utils
 
 LOG = logging.getLogger(__name__)
+
+
+class PluginError(Exception):
+    """Common plugin exception base class"""
+
+
+class MissingPluginError(PluginError):
+    """Exception raised when plugin is not found."""
+
+
+class MissingVersionInfoError(PluginError):
+    """Exception raised when plugin version info is not found."""
+
+
+class IncompatibleVersionError(PluginError):
+    """Exception raised when plugin version is incompatible."""
+
+
+class InvalidRequirementError(PluginError):
+    """Exception raised when plugin requirement is invalid."""
+
+
+class DisabledPluginError(PluginError):
+    """Exception raised when plugin is disabled."""
+
+
+class NotAutomaticPluginError(PluginError):
+    """Exception rased when plugin cannot be automatically enabled."""
 
 
 class ClickInstantiator:
@@ -61,7 +93,11 @@ class BasePlugin(ABC):
     @property
     def plugin_key(self) -> str:
         """Key used to store plugin info in cluster database Config table."""
-        return f"Plugin-{self.name}"
+        return self._get_plugin_key(self.name)
+
+    def _get_plugin_key(self, plugin: str) -> str:
+        """Generate plugin key from plugin."""
+        return f"Plugin-{plugin}"
 
     def install_hook(self) -> None:
         """Install hook for the plugin.
@@ -136,6 +172,22 @@ class BasePlugin(ABC):
         info_from_db.update(info)
         info_from_db.update({"version": str(self.version)})
         update_config(self.client, self.plugin_key, info_from_db)
+
+    def fetch_plugin_version(self, plugin: str) -> Version:
+        """Fetch plugin version stored in database.
+
+        :param plugin: Name of the plugin
+        :returns: Version of the plugin
+        """
+        try:
+            config = read_config(self.client, self._get_plugin_key(plugin))
+        except ConfigItemNotFoundException as e:
+            raise MissingPluginError(f"Plugin {plugin} not found") from e
+        version = config.get("version")
+        if version is None:
+            raise MissingVersionInfoError(f"Version info for plugin {plugin} not found")
+
+        return Version(version)
 
     def get_terraform_plans_base_path(self) -> Path:
         """Return Terraform plan base location."""
@@ -320,6 +372,34 @@ class BasePlugin(ABC):
                     groups[cmd_name] = cmd
 
 
+class PluginRequirement(Requirement):
+    def __init__(self, requirement_string: str, optional: bool = False):
+        super().__init__(requirement_string)
+        self.optional = optional
+        match self.name.split("."):
+            case [plugin]:
+                self.repo = "core"
+                self.name = plugin
+            case [repo, plugin]:
+                self.repo = repo
+                self.name = plugin
+            case _:
+                raise InvalidRequirementError(
+                    f"Invalid format {self.name!r}," " valid format is: '[repo.]plugin'"
+                )
+
+    @property
+    def klass(self) -> Type["EnableDisablePlugin"]:
+        klass = PluginManager().resolve_plugin(self.repo, self.name)
+        if klass is None:
+            raise InvalidRequirementError(f"Plugin {self.name} not found")
+        if not issubclass(klass, EnableDisablePlugin):
+            raise InvalidRequirementError(
+                f"Plugin {self.name} is not of type EnableDisablePlugin"
+            )
+        return klass
+
+
 class EnableDisablePlugin(BasePlugin):
     """Interface for plugins of type on/off.
 
@@ -328,6 +408,8 @@ class EnableDisablePlugin(BasePlugin):
     """
 
     interface_version = Version("0.0.1")
+
+    requires: set[PluginRequirement] = set()
 
     def __init__(self, name: str) -> None:
         """Constructor for plugin interface.
@@ -348,9 +430,135 @@ class EnableDisablePlugin(BasePlugin):
         info = self.get_plugin_info()
         return info.get("enabled", "false").lower() == "true"
 
+    def check_enabled_requirement_is_compatible(self, requirement: PluginRequirement):
+        """Check if an enabled requirement is compatible with current requirer."""
+        if len(requirement.specifier) == 0:
+            # No version requirement, so no need to check version
+            return
+        display_name = requirement.repo + "." + requirement.name
+        try:
+            current_version = self.fetch_plugin_version(requirement.name)
+            LOG.debug(f"Plugin {display_name} version {current_version} found")
+        except MissingVersionInfoError as e:
+            LOG.debug(f"Version info for plugin {display_name} not found")
+            raise PluginError(
+                f"{display_name} has no version recorded,"
+                f" {requirement.specifier} required"
+            ) from e
+
+        if not requirement.specifier.contains(current_version):
+            raise IncompatibleVersionError(
+                f"Plugin {self.name} requires '{display_name}"
+                f"{requirement.specifier}' but enabled plugin is {current_version}"
+            )
+
+    def check_plugin_class_is_compatible(
+        self, plugin: "EnableDisablePlugin", requirement: PluginRequirement
+    ):
+        """Check if actual plugin class is compatible with requirements."""
+
+        if len(requirement.specifier) == 0:
+            # No version requirement, so no need to check version
+            return
+        display_name = requirement.repo + "." + requirement.name
+        klass_version_compatible = all(
+            (
+                plugin.version,
+                requirement.specifier,
+                requirement.specifier.contains(plugin.version),
+            )
+        )
+
+        if not klass_version_compatible:
+            message = (
+                f"Plugin {self.name} requires '{display_name}"
+                f"{requirement.specifier}' but loaded plugin version"
+                f" is {plugin.version}"
+            )
+            if requirement.repo == "core":
+                raise IncompatibleVersionError(
+                    " ".join(
+                        (
+                            "Core plugin has an incompatible version.",
+                            "This should not happen.",
+                            message,
+                        )
+                    )
+                )
+            raise IncompatibleVersionError(
+                " ".join(
+                    (
+                        f"Plugin repository {requirement.repo} has",
+                        "an incompatible version.",
+                        message,
+                        "Check for a repository update.",
+                    )
+                )
+            )
+
+    def check_plugin_is_automatically_enableable(self, plugin: "EnableDisablePlugin"):
+        """Check whether a plugin can be automatically enabled."""
+        spec = inspect.getfullargspec(plugin.enable_plugin)
+        if spec.args != ["self"]:
+            raise NotAutomaticPluginError(
+                f"Plugin {self.name} depends on {plugin.name},"
+                f" and {plugin.name} cannot be automatically enabled."
+                " Please enable it by running"
+                f" 'sunbeam enable {plugin.name} <config options...>'"
+            )
+
+    def check_enablement_requirements(
+        self,
+        state: Union[Literal["enable"], Literal["disable"]] = "enable",
+    ):
+        """Check whether the plugin can be enabled."""
+        plugins = PluginManager().get_all_plugin_classes()
+        for klass in plugins:
+            if not issubclass(klass, EnableDisablePlugin):
+                continue
+            plugin = klass()
+            if not plugin.enabled:
+                continue
+            for requirement in plugin.requires:
+                if requirement.name != self.name:
+                    continue
+                if state == "disable":
+                    raise PluginError(
+                        f"{plugin.name} is enabled and requires {self.name}"
+                    )
+                message = (
+                    f"Plugin {plugin.name} is enabled and "
+                    f"requires '{requirement.name}{requirement.specifier}'"
+                )
+                LOG.debug(message)
+                if requirement.specifier.contains(self.version):
+                    # we found the plugin, and it's compatible
+                    break
+                raise IncompatibleVersionError(message)
+
+    def enable_requirements(self):
+        """Iterate through requirements, enable plugins if possible."""
+        for requirement in self.requires:
+            plugin = requirement.klass()
+
+            if plugin.enabled:
+                self.check_enabled_requirement_is_compatible(requirement)
+                # Plugin is already enabled, and has a compatible version.
+                continue
+
+            if requirement.optional:
+                # Skip enablement since plugin is optional
+                continue
+            self.check_plugin_class_is_compatible(plugin, requirement)
+            self.check_plugin_is_automatically_enableable(plugin)
+
+            ctx = click.get_current_context()
+            ctx.invoke(plugin.enable_plugin)
+
     def pre_enable(self) -> None:
         """Handler to perform tasks before enabling the plugin."""
-        pass
+        self.check_enablement_requirements()
+        self.enable_requirements()
 
     def post_enable(self) -> None:
         """Handler to perform tasks after the plugin is enabled."""
@@ -374,7 +582,7 @@ class EnableDisablePlugin(BasePlugin):
 
     def pre_disable(self) -> None:
         """Handler to perform tasks before disabling the plugin."""
-        pass
+        self.check_enablement_requirements(state="disable")
 
     def post_disable(self) -> None:
         """Handler to perform tasks after the plugin is disabled."""

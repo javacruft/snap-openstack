@@ -22,7 +22,7 @@ from rich.console import Console
 from sunbeam.commands.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
 from sunbeam.jobs.common import run_plan
-from sunbeam.jobs.juju import JujuHelper
+from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
 from sunbeam.plugins.interface.v1.openstack import (
     DisableOpenStackApplicationStep,
     EnableOpenStackApplicationStep,
@@ -94,11 +94,28 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
         run_plan(plan, console)
         click.echo(f"OpenStack {self.name} application disabled.")
 
+    def _get_observability_offer_endpoints(self) -> dict:
+        """Fetch observability offers."""
+        data_location = self.snap.paths.user_data
+        jhelper = JujuHelper(data_location)
+        try:
+            model = run_sync(jhelper.get_model("observability"))
+        except ModelNotFoundException:
+            return {}
+        offer_query = run_sync(model.list_offers())
+        offer_vars = {}
+        for offer in offer_query["results"]:
+            if offer.offer_name == "grafana-dashboards":
+                offer_vars["grafana-dashboard-offer-url"] = offer.offer_url
+            if offer.offer_name == "prometheus-metrics-endpoint":
+                offer_vars["prometheus-metrics-offer-url"] = offer.offer_url
+        return offer_vars
+
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
         database_topology = self.get_database_topology()
 
-        apps = ["aodh", "aodh-mysql-router"]
+        apps = ["aodh", "aodh-mysql-router", "openstack-exporter"]
         if database_topology == "multi":
             apps.append("aodh-mysql")
 
@@ -114,6 +131,7 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
         return {
             "telemetry-channel": "2023.1/edge",
             "enable-telemetry": True,
+            **self._get_observability_offer_endpoints(),
         }
 
     def set_tfvars_on_disable(self) -> dict:

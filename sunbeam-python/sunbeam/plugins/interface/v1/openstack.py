@@ -58,6 +58,8 @@ LOG = logging.getLogger(__name__)
 console = Console()
 
 APPLICATION_DEPLOY_TIMEOUT = 900  # 15 minutes
+OPENSTACK_TERRAFORM_VARS = "TerraformVarsOpenstack"
+OPENSTACK_TERRAFORM_PLAN = "openstack"
 
 
 class TerraformPlanLocation(Enum):
@@ -96,7 +98,7 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         # Based on terraform plan location, tfplan will be either
         # openstack or plugin name
         if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
-            self.tfplan = "openstack"
+            self.tfplan = OPENSTACK_TERRAFORM_PLAN
         else:
             self.tfplan = self.name
 
@@ -125,10 +127,10 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         """Return Terraform OpenStack plan location."""
         return self.get_terraform_plans_base_path() / "etc" / "deploy-openstack"
 
-    def pre_enable(self) -> None:
-        """Handler to perform tasks before enabling the plugin.
+    def pre_checks(self) -> None:
+        """Perform preflight checks before enabling the plugin.
 
-        Perform preflight checks, copy of terraform plan to required locations.
+        Also copies terraform plans to required locations.
         """
         preflight_checks = []
         preflight_checks.append(VerifyBootstrappedCheck())
@@ -137,6 +139,11 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         dst = self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}"
         LOG.debug(f"Updating {dst} from {src}...")
         shutil.copytree(src, dst, dirs_exist_ok=True)
+
+    def pre_enable(self) -> None:
+        """Handler to perform tasks before enabling the plugin."""
+        self.pre_checks()
+        super().pre_enable()
 
     def run_enable_plans(self) -> None:
         """Run plans to enable plugin."""
@@ -157,11 +164,9 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         click.echo(f"OpenStack {self.name} application enabled.")
 
     def pre_disable(self) -> None:
-        """Handler to perform tasks before disabling the plugin.
-
-        Perform preflight checks, copy of terraform plan to required locations.
-        """
-        self.pre_enable()
+        """Handler to perform tasks before disabling the plugin."""
+        self.pre_checks()
+        super().pre_disable()
 
     def run_disable_plans(self) -> None:
         """Run plans to disable the plugin."""
@@ -191,7 +196,7 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         TerraformVars-<plugin name>.
         """
         if self.tf_plan_location == TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO:
-            return "TerraformVarsOpenstack"
+            return OPENSTACK_TERRAFORM_VARS
         else:
             return f"TerraformVars{self.app_name}"
 
@@ -246,6 +251,38 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
     def disable_plugin(self) -> None:
         """Disable plugin command."""
         super().disable_plugin()
+
+    def add_horizon_plugin_to_tfvars(self, plugin: str) -> dict[str, list[str]]:
+        """Tf vars to have the given plugin enabled.
+
+        Return of the function is expected to be passed to set_tfvars_on_enable.
+        """
+        try:
+            tfvars = read_config(self.client, self.get_tfvar_config_key())
+        except ConfigItemNotFoundException:
+            tfvars = {}
+
+        horizon_plugins = tfvars.get("horizon-plugins", [])
+        if plugin not in horizon_plugins:
+            horizon_plugins.append(plugin)
+
+        return {"horizon-plugins": sorted(horizon_plugins)}
+
+    def remove_horizon_plugin_from_tfvars(self, plugin: str) -> dict[str, list[str]]:
+        """TF vars to have the given plugin disabled.
+
+        Return of the function is expected to be passed to set_tfvars_on_disable.
+        """
+        try:
+            tfvars = read_config(self.client, self.get_tfvar_config_key())
+        except ConfigItemNotFoundException:
+            tfvars = {}
+
+        horizon_plugins = tfvars.get("horizon-plugins", [])
+        if plugin in horizon_plugins:
+            horizon_plugins.remove(plugin)
+
+        return {"horizon-plugins": sorted(horizon_plugins)}
 
 
 class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):

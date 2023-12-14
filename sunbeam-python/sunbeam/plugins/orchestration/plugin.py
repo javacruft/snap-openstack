@@ -37,7 +37,7 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
-        apps = ["heat", "heat-mysql-router", "heat-cfn", "heat-cfn-mysql-router"]
+        apps = ["heat", "heat-mysql-router"]
         if self.get_database_topology() == "multi":
             apps.extend(["heat-mysql"])
 
@@ -48,11 +48,15 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
         return {
             "heat-channel": "2023.1/edge",
             "enable-heat": True,
+            **self.add_horizon_plugin_to_tfvars("heat"),
         }
 
     def set_tfvars_on_disable(self) -> dict:
         """Set terraform variables to disable the application."""
-        return {"enable-heat": False}
+        return {
+            "enable-heat": False,
+            **self.remove_horizon_plugin_from_tfvars("heat"),
+        }
 
     def set_tfvars_on_resize(self) -> dict:
         """Set terraform variables to resize the application."""

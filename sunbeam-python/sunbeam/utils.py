@@ -27,6 +27,8 @@ import netifaces
 import pwgen
 from pyroute2 import IPDB, NDB
 
+from sunbeam.plugins.interface.v1.base import PluginError
+
 LOG = logging.getLogger(__name__)
 LOCAL_ACCESS = "local"
 REMOTE_ACCESS = "remote"
@@ -242,7 +244,7 @@ def get_free_nic() -> str:
     return nic
 
 
-def get_nameservers(ipv4_only=True) -> List[str]:
+def get_nameservers(ipv4_only=True, max_count=5) -> List[str]:
     """Return a list of nameservers used by the host."""
     resolve_config = Path("/run/systemd/resolve/resolv.conf")
     nameservers = []
@@ -258,7 +260,7 @@ def get_nameservers(ipv4_only=True) -> List[str]:
         nameservers = list(set(nameservers))
     except FileNotFoundError:
         nameservers = []
-    return nameservers
+    return nameservers[:max_count]
 
 
 def generate_password() -> str:
@@ -272,6 +274,10 @@ class CatchGroup(click.Group):
     def __call__(self, *args, **kwargs):
         try:
             return self.main(*args, **kwargs)
+        except PluginError as e:
+            LOG.debug(e, exc_info=True)
+            LOG.error("Error: %s", e)
+            sys.exit(1)
         except Exception as e:
             LOG.debug(e, exc_info=True)
             message = (

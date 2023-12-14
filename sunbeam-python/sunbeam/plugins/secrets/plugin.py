@@ -18,6 +18,7 @@ from packaging.version import Version
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.jobs.common import read_config
+from sunbeam.plugins.interface.v1.base import PluginRequirement
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
@@ -27,6 +28,8 @@ from sunbeam.plugins.vault.plugin import VaultPlugin
 
 class SecretsPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
+
+    requires = {PluginRequirement("vault")}
 
     def __init__(self) -> None:
         super().__init__(

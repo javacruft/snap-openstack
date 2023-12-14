@@ -154,6 +154,7 @@ def model(applications, units) -> Model:
     model.units = units
     model.applications = applications
     model.all_units_idle = Mock()
+    model.info = Mock()
 
     def test_condition(condition, timeout):
         """False condition raises a timeout"""

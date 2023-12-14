@@ -717,26 +717,11 @@ class SetLocalHypervisorOptions(BaseStep):
         return Result(ResultType.COMPLETED)
 
 
-@click.command()
-@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
-@click.option(
-    "-p",
-    "--preseed",
-    help="Preseed file.",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.option(
-    "-o",
-    "--openrc",
-    help="Output file for cloud access details.",
-    type=click.Path(dir_okay=False, path_type=Path),
-)
-def configure(
+def _configure(
     openrc: Optional[Path] = None,
     preseed: Optional[Path] = None,
     accept_defaults: bool = False,
-) -> None:
-    """Configure cloud with some sensible defaults."""
+):
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
     preflight_checks.append(VerifyBootstrappedCheck())
@@ -804,3 +789,39 @@ def configure(
             )
         )
     run_plan(plan, console)
+
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+@click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
+@click.option(
+    "-p",
+    "--preseed",
+    help="Preseed file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "-o",
+    "--openrc",
+    help="Output file for cloud access details.",
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+def configure(
+    ctx: click.Context,
+    openrc: Optional[Path] = None,
+    preseed: Optional[Path] = None,
+    accept_defaults: bool = False,
+) -> None:
+    """Configure cloud with some sensible defaults."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _configure(openrc, preseed, accept_defaults)
+    for name, command in configure.commands.items():
+        LOG.debug("Running configure %r", name)
+        cmd_ctx = click.Context(
+            command,
+            parent=ctx,
+            info_name=command.name,
+            allow_extra_args=True,
+        )
+        cmd_ctx.forward(command)

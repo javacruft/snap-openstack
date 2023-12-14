@@ -650,6 +650,27 @@ class JujuHelper:
             ) from e
 
     @controller
+    async def wait_all_units_ready(
+        self,
+        app: str,
+        model: str,
+        accepted_status: Optional[Dict[str, List[str]]] = None,
+        timeout: Optional[int] = None,
+    ):
+        """Block execution until all units in an application are ready.
+
+        :app: Name of the app whose units to wait for
+        :model: Name of the model where the unit is located
+        :accepted status: map of accepted statuses for "workload" and "agent"
+        :timeout: Waiting timeout in seconds
+        """
+        model_impl = await self.get_model(model)
+        for unit in model_impl.applications[app].units:
+            await self.wait_unit_ready(
+                unit.entity_id, model, accepted_status=accepted_status
+            )
+
+    @controller
     async def wait_until_active(
         self,
         model: str,

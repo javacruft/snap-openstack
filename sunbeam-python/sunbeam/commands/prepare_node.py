@@ -19,7 +19,7 @@ from rich.console import Console
 console = Console()
 
 
-JUJU_CHANNEL = "3.1/stable"
+JUJU_CHANNEL = "3.2/stable"
 SUPPORTED_RELEASE = "jammy"
 
 PREPARE_NODE_TEMPLATE = f"""#!/bin/bash

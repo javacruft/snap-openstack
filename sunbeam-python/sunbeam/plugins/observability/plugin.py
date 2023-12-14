@@ -29,6 +29,7 @@ from rich.console import Console
 from rich.status import Status
 from snaphelpers import Snap
 
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
@@ -39,7 +40,7 @@ from sunbeam.commands.microk8s import (
     MICROK8S_CLOUD,
     MICROK8S_DEFAULT_STORAGECLASS,
 )
-from sunbeam.commands.openstack import PatchLoadBalancerServicesStep
+from sunbeam.commands.openstack import OPENSTACK_MODEL, PatchLoadBalancerServicesStep
 from sunbeam.commands.terraform import (
     TerraformException,
     TerraformHelper,
@@ -49,7 +50,9 @@ from sunbeam.jobs.common import (
     BaseStep,
     Result,
     ResultType,
+    read_config,
     run_plan,
+    update_config,
     update_status_background,
 )
 from sunbeam.jobs.juju import (
@@ -59,7 +62,11 @@ from sunbeam.jobs.juju import (
     TimeoutException,
     run_sync,
 )
-from sunbeam.plugins.interface.v1.base import EnableDisablePlugin
+from sunbeam.plugins.interface.v1.base import EnableDisablePlugin, PluginRequirement
+from sunbeam.plugins.interface.v1.openstack import (
+    OPENSTACK_TERRAFORM_PLAN,
+    OPENSTACK_TERRAFORM_VARS,
+)
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -67,6 +74,89 @@ console = Console()
 OBSERVABILITY_MODEL = "observability"
 OBSERVABILITY_DEPLOY_TIMEOUT = 1200  # 20 minutes
 CONTROLLER_MODEL = CONTROLLER_MODEL.split("/")[-1]
+
+
+class FillObservabilityOffersStep(BaseStep):
+    """Update terraform plan to fill observability offers."""
+
+    def __init__(
+        self,
+        tfhelper: TerraformHelper,
+        tfhelper_cos: TerraformHelper,
+        jhelper: JujuHelper,
+    ) -> None:
+        super().__init__(
+            "Fill Observability Offers",
+            "Fill Observability Offers in Openstack",
+        )
+        self.tfhelper = tfhelper
+        self.tfhelper_cos = tfhelper_cos
+        self.jhelper = jhelper
+        self.model = OPENSTACK_MODEL
+        self.client = Client()
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Apply terraform configuration"""
+        config_key = OPENSTACK_TERRAFORM_VARS
+
+        try:
+            tfvars = read_config(self.client, config_key)
+        except ConfigItemNotFoundException:
+            tfvars = {}
+        output_vars = self.tfhelper_cos.output()
+
+        for key, value in output_vars.items():
+            if key in (
+                "prometheus-metrics-offer-url",
+                "grafana-dashboard-offer-url",
+            ):
+                tfvars[key] = value
+        update_config(self.client, config_key, tfvars)
+        self.tfhelper.write_tfvars(tfvars)
+
+        try:
+            self.tfhelper.apply()
+        except TerraformException as e:
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
+
+
+class RemoveObservabilityIntegrationStep(BaseStep):
+    def __init__(
+        self,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+    ) -> None:
+        super().__init__(
+            "Remove Observability Integration",
+            "Remove Observability Integration in Openstack",
+        )
+        self.tfhelper = tfhelper
+        self.jhelper = jhelper
+        self.model = OPENSTACK_MODEL
+        self.client = Client()
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Apply terraform configuration"""
+        config_key = OPENSTACK_TERRAFORM_VARS
+
+        try:
+            tfvars = read_config(self.client, config_key)
+        except ConfigItemNotFoundException:
+            tfvars = {}
+
+        tfvars.pop("prometheus-metrics-offer-url", None)
+        tfvars.pop("grafana-dashboard-offer-url", None)
+        update_config(self.client, config_key, tfvars)
+        self.tfhelper.write_tfvars(tfvars)
+
+        try:
+            self.tfhelper.apply()
+        except TerraformException as e:
+            return Result(ResultType.FAILED, str(e))
+
+        return Result(ResultType.COMPLETED)
 
 
 class DeployObservabilityStackStep(BaseStep, JujuStepHelper):
@@ -148,7 +238,7 @@ class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
         tfhelper_cos: TerraformHelper,
         jhelper: JujuHelper,
     ):
-        super().__init__("Deploy Grafana Agent", "Deploying Grafana Agent")
+        super().__init__("Deploy Grafana Agent", "Deploy Grafana Agent")
         self.tfhelper = tfhelper
         self.tfhelper_cos = tfhelper_cos
         self.jhelper = jhelper
@@ -338,6 +428,7 @@ class PatchCosLoadBalancerStep(PatchLoadBalancerServicesStep):
 
 class ObservabilityPlugin(EnableDisablePlugin):
     version = Version("0.0.1")
+    requires = {PluginRequirement("telemetry", optional=True)}
 
     def __init__(self) -> None:
         super().__init__(name="observability")
@@ -370,6 +461,13 @@ class ObservabilityPlugin(EnableDisablePlugin):
             backend="http",
             data_location=data_location,
         )
+        openstack_plan = "deploy-" + OPENSTACK_TERRAFORM_PLAN
+        tfhelper_openstack = TerraformHelper(
+            path=self.snap.paths.user_common / "etc" / openstack_plan,
+            plan=OPENSTACK_TERRAFORM_PLAN + "-plan",
+            backend="http",
+            data_location=data_location,
+        )
 
         jhelper = JujuHelper(data_location)
 
@@ -377,6 +475,7 @@ class ObservabilityPlugin(EnableDisablePlugin):
             TerraformInitStep(tfhelper_cos),
             DeployObservabilityStackStep(self, tfhelper_cos, jhelper),
             PatchCosLoadBalancerStep(),
+            FillObservabilityOffersStep(tfhelper_openstack, tfhelper_cos, jhelper),
         ]
 
         grafana_agent_plan = [
@@ -406,11 +505,19 @@ class ObservabilityPlugin(EnableDisablePlugin):
             backend="http",
             data_location=data_location,
         )
+        openstack_plan = "deploy-" + OPENSTACK_TERRAFORM_PLAN
+        tfhelper_openstack = TerraformHelper(
+            path=self.snap.paths.user_common / "etc" / openstack_plan,
+            plan=OPENSTACK_TERRAFORM_PLAN + "-plan",
+            backend="http",
+            data_location=data_location,
+        )
 
         jhelper = JujuHelper(data_location)
 
         cos_plan = [
             TerraformInitStep(tfhelper_cos),
+            RemoveObservabilityIntegrationStep(tfhelper_openstack, jhelper),
             RemoveObservabilityStackStep(self, tfhelper_cos, jhelper),
         ]
 

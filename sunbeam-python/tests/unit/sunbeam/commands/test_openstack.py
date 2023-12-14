@@ -25,6 +25,10 @@ from sunbeam.commands.openstack import (
     DeployControlPlaneStep,
     PatchLoadBalancerServicesStep,
     ResizeControlPlaneStep,
+    compute_ceph_replica_scale,
+    compute_ha_scale,
+    compute_ingress_scale,
+    compute_os_api_scale,
 )
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
@@ -341,3 +345,60 @@ class PatchLoadBalancerServicesStepTest(unittest.TestCase):
             METALLB_ANNOTATION
         ]
         assert annotation == "fake-ip"
+
+
+@pytest.mark.parametrize(
+    "topology,control_nodes,scale",
+    [
+        ("single", 1, 1),
+        ("multi", 2, 1),
+        ("multi", 3, 3),
+        ("multi", 9, 3),
+        ("large", 9, 3),
+    ],
+)
+def test_compute_ha_scale(topology, control_nodes, scale):
+    assert compute_ha_scale(topology, control_nodes) == scale
+
+
+@pytest.mark.parametrize(
+    "topology,control_nodes,scale",
+    [
+        ("single", 1, 1),
+        ("multi", 2, 2),
+        ("multi", 3, 3),
+        ("multi", 9, 3),
+        ("large", 4, 6),
+        ("large", 9, 7),
+    ],
+)
+def test_compute_os_api_scale(topology, control_nodes, scale):
+    assert compute_os_api_scale(topology, control_nodes) == scale
+
+
+@pytest.mark.parametrize(
+    "topology,control_nodes,scale",
+    [
+        ("single", 1, 1),
+        ("multi", 2, 2),
+        ("multi", 3, 3),
+        ("multi", 9, 9),
+        ("large", 4, 4),
+        ("large", 9, 9),
+    ],
+)
+def test_compute_ingress_scale(topology, control_nodes, scale):
+    assert compute_ingress_scale(topology, control_nodes) == scale
+
+
+@pytest.mark.parametrize(
+    "topology,storage_nodes,scale",
+    [
+        ("single", 1, 1),
+        ("multi", 1, 1),
+        ("multi", 9, 3),
+        ("multi", 2, 2),
+    ],
+)
+def test_compute_ceph_replica_scale(topology, storage_nodes, scale):
+    assert compute_ceph_replica_scale(topology, storage_nodes) == scale

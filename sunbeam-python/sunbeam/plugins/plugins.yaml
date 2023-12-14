@@ -55,3 +55,15 @@ sunbeam-plugins:
       path: sunbeam.plugins.secrets.plugin.SecretsPlugin
       supported_architectures:
         - amd64
+    - name: "caas"
+      version: "0.0.1"
+      description: "Plugin for OpenStack Container as a Service"
+      path: sunbeam.plugins.caas.plugin.CaasPlugin
+      supported_architectures:
+        - amd64
+    - name: "ldap-domain"
+      version: "0.0.1"
+      description: "Plugin for integrating with an existing LDAP backend"
+      path: sunbeam.plugins.ldap.plugin.LDAPPlugin
+      supported_architectures:
+        - amd64

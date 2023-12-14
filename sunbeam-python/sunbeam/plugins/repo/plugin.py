@@ -422,7 +422,7 @@ class RemovePluginRepoStep(BaseStep):
         if enabled_plugins:
             message = (
                 f"ERROR: Cannot remove {self.repo_name} as following "
-                "plugins are enabled: {enabled_plugins}"
+                f"plugins are enabled: {enabled_plugins}"
             )
             return Result(ResultType.FAILED, message)
 
