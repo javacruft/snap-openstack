@@ -47,5 +47,6 @@ resource "juju_application" "microk8s" {
     addons                        = join(" ", [for key, value in var.addons : "${key}:${value}"])
     disable_cert_reissue          = true
     kubelet_serialize_image_pulls = false
+    skip_verify                   = true
   }
 }
