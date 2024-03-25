@@ -13,8 +13,7 @@
 # limitations under the License.
 
 import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -40,19 +39,8 @@ def mock_run_sync(mocker):
 
 
 @pytest.fixture()
-def cclient():
-    with patch("sunbeam.plugins.interface.v1.base.Client") as p:
-        yield p
-
-
-@pytest.fixture()
 def jhelper():
     yield AsyncMock()
-
-
-@pytest.fixture()
-def tfhelper():
-    yield Mock(path=Path())
 
 
 @pytest.fixture()
@@ -61,88 +49,90 @@ def observabilityplugin():
         yield p
 
 
+@pytest.fixture()
+def proxy_settings():
+    with patch("sunbeam.plugins.observability.plugin.get_proxy_settings") as p:
+        yield p
+
+
 class TestDeployObservabilityStackStep:
-    def test_run(self, cclient, jhelper, tfhelper, observabilityplugin):
+    def test_run(self, jhelper, observabilityplugin, proxy_settings):
+        proxy_settings.return_value = {}
         step = observability_plugin.DeployObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, cclient, jhelper, tfhelper, observabilityplugin):
-        tfhelper.apply.side_effect = TerraformException("apply failed...")
+    def test_run_tf_apply_failed(self, jhelper, observabilityplugin, proxy_settings):
+        proxy_settings.return_value = {}
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.side_effect = (
+            TerraformException("apply failed...")
+        )
 
         step = observability_plugin.DeployObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_waiting_timed_out(self, jhelper, observabilityplugin, proxy_settings):
+        proxy_settings.return_value = {}
         jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
         step = observability_plugin.DeployObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
 
 class TestRemoveObservabilityStackStep:
-    def test_run(self, cclient, jhelper, tfhelper, observabilityplugin):
+    def test_run(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
         step = observability_plugin.RemoveObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_destroy_failed(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_tf_destroy_failed(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
 
         step = observability_plugin.RemoveObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "destroy failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_waiting_timed_out(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
         jhelper.wait_model_gone.side_effect = TimeoutException("timed out")
 
         step = observability_plugin.RemoveObservabilityStackStep(
-            observabilityplugin, tfhelper, jhelper
+            observabilityplugin, jhelper
         )
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_model_gone.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -150,87 +140,68 @@ class TestRemoveObservabilityStackStep:
 
 
 class TestDeployGrafanaAgentStep:
-    def test_run(self, cclient, jhelper, tfhelper, observabilityplugin):
-        step = observability_plugin.DeployGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
-        )
+    def test_run(self, jhelper, observabilityplugin):
+        step = observability_plugin.DeployGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, cclient, jhelper, tfhelper, observabilityplugin):
-        tfhelper.apply.side_effect = TerraformException("apply failed...")
-
-        step = observability_plugin.DeployGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
+    def test_run_tf_apply_failed(self, jhelper, observabilityplugin):
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.side_effect = (
+            TerraformException("apply failed...")
         )
+
+        step = observability_plugin.DeployGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_waiting_timed_out(self, jhelper, observabilityplugin):
         jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
-        step = observability_plugin.DeployGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
-        )
+        step = observability_plugin.DeployGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
-        tfhelper.apply.assert_called_once()
+        observabilityplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
 
 class TestRemoveGrafanaAgentStep:
-    def test_run(self, cclient, jhelper, tfhelper, observabilityplugin):
-        step = observability_plugin.RemoveGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
-        )
+    def test_run(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
+        step = observability_plugin.RemoveGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_destroy_failed(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_tf_destroy_failed(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
         tfhelper.destroy.side_effect = TerraformException("destroy failed...")
 
-        step = observability_plugin.RemoveGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
-        )
+        step = observability_plugin.RemoveGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "destroy failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, jhelper, tfhelper, observabilityplugin
-    ):
+    def test_run_waiting_timed_out(self, jhelper, observabilityplugin):
+        tfhelper = observabilityplugin.manifest.get_tfhelper()
         jhelper.wait_application_gone.side_effect = TimeoutException("timed out")
 
-        step = observability_plugin.RemoveGrafanaAgentStep(
-            observabilityplugin, tfhelper, tfhelper, jhelper
-        )
+        step = observability_plugin.RemoveGrafanaAgentStep(observabilityplugin, jhelper)
         result = step.run()
 
-        tfhelper.write_tfvars.assert_called_once()
         tfhelper.destroy.assert_called_once()
         jhelper.wait_application_gone.assert_called_once()
         assert result.result_type == ResultType.FAILED

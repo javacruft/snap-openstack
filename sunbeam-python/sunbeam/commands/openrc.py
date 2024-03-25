@@ -17,43 +17,33 @@ import logging
 
 import click
 from rich.console import Console
-from snaphelpers import Snap
 
+from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs import juju
 from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
 from sunbeam.jobs.common import run_preflight_checks
+from sunbeam.jobs.deployment import Deployment
 
 LOG = logging.getLogger(__name__)
 console = Console()
-snap = Snap()
 
 
 @click.command()
-def openrc() -> None:
+@click.pass_context
+def openrc(ctx: click.Context) -> None:
     """Retrieve openrc for cloud admin account."""
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
     preflight_checks = []
     preflight_checks.append(DaemonGroupCheck())
-    preflight_checks.append(VerifyBootstrappedCheck())
+    preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
 
-    data_location = snap.paths.user_data
-    jhelper = juju.JujuHelper(data_location)
+    jhelper = juju.JujuHelper(deployment.get_connected_controller())
 
     with console.status("Retrieving openrc from Keystone service ... "):
-        # Retrieve config from juju actions
-        model = OPENSTACK_MODEL
-        app = "keystone"
-        action_cmd = "get-admin-account"
-        unit = juju.run_sync(jhelper.get_leader_unit(app, model))
-        if not unit:
-            _message = f"Unable to get {app} leader"
-            raise click.ClickException(_message)
-
-        action_result = juju.run_sync(jhelper.run_action(unit, model, action_cmd))
-
-        if action_result.get("return-code", 0) > 1:
-            _message = "Unable to retrieve openrc from Keystone service"
-            raise click.ClickException(_message)
-        else:
-            console.print(action_result.get("openrc"))
+        creds = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+        console.print("# openrc for access to OpenStack")
+        for param, value in creds.items():
+            console.print(f"export {param}={value}")

@@ -80,7 +80,7 @@ func getConfigItems(ctx context.Context, stmt *sql.Stmt, args ...any) ([]ConfigI
 	return objects, nil
 }
 
-// getConfigItems can be used to run handwritten query strings to return a slice of objects.
+// getConfigItemsRaw can be used to run handwritten query strings to return a slice of objects.
 func getConfigItemsRaw(ctx context.Context, tx *sql.Tx, sql string, args ...any) ([]ConfigItem, error) {
 	objects := make([]ConfigItem, 0)
 

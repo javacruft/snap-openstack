@@ -80,7 +80,7 @@ func getJujuUsers(ctx context.Context, stmt *sql.Stmt, args ...any) ([]JujuUser,
 	return objects, nil
 }
 
-// getJujuUsers can be used to run handwritten query strings to return a slice of objects.
+// getJujuUsersRaw can be used to run handwritten query strings to return a slice of objects.
 func getJujuUsersRaw(ctx context.Context, tx *sql.Tx, sql string, args ...any) ([]JujuUser, error) {
 	objects := make([]JujuUser, 0)
 

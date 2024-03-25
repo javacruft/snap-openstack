@@ -18,10 +18,12 @@ import logging
 import click
 from packaging.version import Version
 
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 
@@ -29,11 +31,30 @@ LOG = logging.getLogger(__name__)
 class OrchestrationPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="orchestration",
+            "orchestration",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
+
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {"charms": {"heat-k8s": {"channel": OPENSTACK_CHANNEL}}}
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "heat-k8s": {
+                        "channel": "heat-channel",
+                        "revision": "heat-revision",
+                        "config": "heat-config",
+                    }
+                }
+            }
+        }
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
@@ -46,7 +67,6 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "heat-channel": "2023.2/stable",
             "enable-heat": True,
             **self.add_horizon_plugin_to_tfvars("heat"),
         }

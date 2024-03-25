@@ -18,7 +18,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.8.0"
+      version = "= 0.10.1"
     }
   }
 
@@ -26,26 +26,28 @@ terraform {
 
 provider "juju" {}
 
-data "juju_model" "controller" {
-  name = "controller"
+data "juju_model" "machine_model" {
+  name = var.machine_model
 }
 
 resource "juju_application" "microk8s" {
   name  = "microk8s"
   trust = true
-  model = data.juju_model.controller.name
+  model = data.juju_model.machine_model.name
   units = length(var.machine_ids) # need to manage the number of units
 
   charm {
-    name    = "microk8s"
-    channel = var.charm_microk8s_channel
-    series  = "jammy"
+    name     = "microk8s"
+    channel  = var.charm_microk8s_channel
+    revision = var.charm_microk8s_revision
+    base    = "ubuntu@22.04"
   }
 
-  config = {
+  config = merge({
     channel                       = var.microk8s_channel
     addons                        = join(" ", [for key, value in var.addons : "${key}:${value}"])
     disable_cert_reissue          = true
     kubelet_serialize_image_pulls = false
-  }
+    skip_verify                   = true
+  }, var.charm_microk8s_config)
 }

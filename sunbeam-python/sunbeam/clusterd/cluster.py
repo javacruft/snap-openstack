@@ -15,7 +15,8 @@
 
 import json
 import logging
-from typing import Any, List, Optional, Union
+import secrets
+from typing import Any, List, Union
 
 from requests import codes
 from requests.models import HTTPError
@@ -107,12 +108,19 @@ class MicroClusterService(service.BaseService):
 class ExtendedAPIService(service.BaseService):
     """Client for Sunbeam extended Cluster API."""
 
-    def add_node_info(self, name: str, role: List[str]) -> None:
+    def add_node_info(
+        self, name: str, role: List[str], machineid: int = -1, systemid: str = ""
+    ) -> None:
         """Add Node information to cluster database."""
-        data = {"name": name, "role": role}
+        data = {
+            "name": name,
+            "role": role,
+            "machineid": machineid,
+            "systemid": systemid,
+        }
         self._post("/1.0/nodes", data=json.dumps(data))
 
-    def list_nodes(self) -> list:
+    def list_nodes(self) -> list[dict]:
         """List all nodes."""
         nodes = self._get("/1.0/nodes")
         return nodes.get("metadata")
@@ -126,10 +134,14 @@ class ExtendedAPIService(service.BaseService):
         self._delete(f"1.0/nodes/{name}")
 
     def update_node_info(
-        self, name: str, role: Optional[List[str]] = None, machineid: int = -1
+        self,
+        name: str,
+        role: list[str] | None = None,
+        machineid: int = -1,
+        systemid: str = "",
     ) -> None:
         """Update role and machineid for node."""
-        data = {"role": role, "machineid": machineid}
+        data = {"role": role, "machineid": machineid, "systemid": systemid}
         self._put(f"1.0/nodes/{name}", data=json.dumps(data))
 
     def add_juju_user(self, name: str, token: str) -> None:
@@ -194,6 +206,31 @@ class ExtendedAPIService(service.BaseService):
         """Unlock plan."""
         self._put(f"/1.0/terraformunlock/{plan}", data=json.dumps(lock))
 
+    def add_manifest(self, data: str) -> str:
+        """Add manifest to cluster database."""
+        manifest_id = secrets.token_hex(16)
+        data = {"manifestid": manifest_id, "data": data}
+        self._post("/1.0/manifests", data=json.dumps(data))
+        return manifest_id
+
+    def list_manifests(self) -> list:
+        """List all manifests."""
+        manifests = self._get("/1.0/manifests")
+        return manifests.get("metadata")
+
+    def get_manifest(self, manifest_id: str) -> dict:
+        """Get manifest info along with data."""
+        manifest = self._get(f"/1.0/manifests/{manifest_id}")
+        return manifest.get("metadata")
+
+    def get_latest_manifest(self) -> dict:
+        """Get latest manifest."""
+        return self.get_manifest("latest")
+
+    def delete_manifest(self, manifest_id: str) -> None:
+        """Remove manifest from database."""
+        self._delete(f"/1.0/manifest/{manifest_id}")
+
 
 class ClusterService(MicroClusterService, ExtendedAPIService):
     """Lists and manages cluster."""
@@ -202,9 +239,11 @@ class ClusterService(MicroClusterService, ExtendedAPIService):
     # sucessfully run. Note: this is distinct from microcluster bootstrap.
     SUNBEAM_BOOTSTRAP_KEY = "sunbeam_bootstrapped"
 
-    def bootstrap(self, name: str, address: str, role: List[str]) -> None:
+    def bootstrap(
+        self, name: str, address: str, role: List[str], machineid: int = -1
+    ) -> None:
         self.bootstrap_cluster(name, address)
-        self.add_node_info(name, role)
+        self.add_node_info(name, role, machineid)
 
     def add_node(self, name: str) -> str:
         return self.generate_token(name)

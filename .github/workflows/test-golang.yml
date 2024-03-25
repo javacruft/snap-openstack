@@ -13,11 +13,11 @@ jobs:
       - name: Setup GO
         uses: actions/setup-go@v4
         with:
-          go-version: '1.19'
+          go-version: '1.21'
       - name: Install dependencies
         run: |
           sudo add-apt-repository -y ppa:dqlite/dev
-          sudo apt install build-essential dqlite-tools libdqlite-dev libraft-dev -y
+          sudo apt install build-essential dqlite-tools libdqlite-dev libraft-canonical-dev -y
       - name: Run linters
         working-directory: ./sunbeam-microcluster
         run: make check-static
@@ -31,11 +31,11 @@ jobs:
       - name: Setup GO
         uses: actions/setup-go@v4
         with:
-          go-version: '1.19'
+          go-version: '1.21'
       - name: Install dependencies
         run: |
           sudo add-apt-repository -y ppa:dqlite/dev
-          sudo apt install build-essential dqlite-tools libdqlite-dev libraft-dev -y
+          sudo apt install build-essential dqlite-tools libdqlite-dev libraft-canonical-dev -y
       - name: Run tests
         working-directory: ./sunbeam-microcluster
         run: make check-unit

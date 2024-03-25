@@ -18,4 +18,6 @@ var Endpoints = []rest.Endpoint{
 	jujuusersCmd,
 	jujuuserCmd,
 	configCmd,
+	manifestsCmd,
+	manifestCmd,
 }

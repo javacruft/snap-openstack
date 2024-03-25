@@ -14,118 +14,33 @@
 # limitations under the License.
 
 import ipaddress
-import json
 import logging
 import os
-import shutil
-import subprocess
 from pathlib import Path
-from typing import Any, Optional, TextIO
+from typing import Optional
 
 import click
 from rich.console import Console
-from rich.prompt import InvalidResponse, PromptBase
-from snaphelpers import Snap
 
 import sunbeam.jobs.questions
 from sunbeam import utils
 from sunbeam.clusterd.client import Client
-from sunbeam.commands.juju import JujuLoginStep
-from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.commands.terraform import (
     TerraformException,
     TerraformHelper,
     TerraformInitStep,
 )
-from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
-from sunbeam.jobs.common import (
-    BaseStep,
-    Result,
-    ResultType,
-    Status,
-    run_plan,
-    run_preflight_checks,
-)
+from sunbeam.jobs.common import BaseStep, Result, ResultType, Status
 from sunbeam.jobs.juju import (
-    CONTROLLER_MODEL,
+    ActionFailedException,
     JujuHelper,
-    ModelNotFoundException,
+    LeaderNotFoundException,
     run_sync,
 )
 
 CLOUD_CONFIG_SECTION = "CloudConfig"
 LOG = logging.getLogger(__name__)
 console = Console()
-
-
-class NicPrompt(PromptBase[str]):
-    """A prompt that asks for a NIC on the local machine and validates it.
-
-    Unlike other questions this prompt validates the users choice and if it
-    fails validation the user has an oppertunity to fix any issue in another
-    session and continue without exiting from the prompt.
-    """
-
-    response_type = str
-    validate_error_message = "[prompt.invalid]Please valid nic"
-
-    def check_choice(self, value: str) -> bool:
-        """Validate the choice of nic."""
-        nics = utils.get_free_nics(include_configured=True)
-        try:
-            value = value.strip().lower()
-        except AttributeError:
-            # Likely an empty string has been returned.
-            raise InvalidResponse(f"\n'{value}' not a valid nic name")
-        if value not in nics:
-            raise InvalidResponse(f"\n'{value}' not found")
-        return True
-
-    def __call__(self, *, default: Any = ..., stream: Optional[TextIO] = None) -> Any:
-        """Run the prompt loop.
-
-        Args:
-            default (Any, optional): Optional default value.
-
-        Returns:
-            PromptType: Processed value.
-        """
-        while True:
-            # Limit options displayed to user to unconfigured nics.
-            self.choices = utils.get_free_nics(include_configured=False)
-            # Assume that if a default has been passed in and it is configured it is
-            # probably the right one. The user will be prompted to confirm later.
-            if not default or default not in utils.get_free_nics(
-                include_configured=True
-            ):
-                if len(self.choices) > 0:
-                    default = self.choices[0]
-            self.pre_prompt()
-            prompt = self.make_prompt(default)
-            value = self.get_input(self.console, prompt, password=False, stream=stream)
-            if value == "":
-                if default:
-                    # Unlike super.__call__ do not return here as we still need to
-                    # validate the choice.
-                    value = default
-                else:
-                    self.console.print("\nInvalid nic")
-                    continue
-            try:
-                return_value = self.process_response(value)
-            except InvalidResponse as error:
-                self.on_validate_error(value, error)
-                continue
-            else:
-                return return_value
-
-
-class NicQuestion(sunbeam.jobs.questions.Question):
-    """Ask the user a simple yes / no question."""
-
-    @property
-    def question_function(self):
-        return NicPrompt.ask
 
 
 def user_questions():
@@ -195,14 +110,6 @@ def ext_net_questions():
     }
 
 
-def local_hypervisor_questions():
-    return {
-        "nic": NicQuestion(
-            "Free network interface that will be configured for external traffic"
-        ),
-    }
-
-
 def ext_net_questions_local_only():
     return {
         "cidr": sunbeam.jobs.questions.PromptQuestion(
@@ -262,17 +169,21 @@ def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
     app = "keystone"
     action_cmd = "get-admin-account"
 
-    unit = run_sync(jhelper.get_leader_unit(app, model))
-    if not unit:
-        _message = f"Unable to get {app} leader"
-        raise click.ClickException(_message)
+    try:
+        unit = run_sync(jhelper.get_leader_unit(app, model))
+    except LeaderNotFoundException:
+        raise click.ClickException(f"Unable to get {app} leader")
 
-    action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+    try:
+        action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+    except ActionFailedException as e:
+        LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
+        raise click.ClickException("Unable to retrieve openrc from Keystone service")
+
     if action_result.get("return-code", 0) > 1:
-        _message = "Unable to retrieve openrc from Keystone service"
-        raise click.ClickException(_message)
+        raise click.ClickException("Unable to retrieve openrc from Keystone service")
 
-    return {
+    params = {
         "OS_USERNAME": action_result.get("username"),
         "OS_PASSWORD": action_result.get("password"),
         "OS_AUTH_URL": action_result.get("public-endpoint"),
@@ -283,23 +194,66 @@ def retrieve_admin_credentials(jhelper: JujuHelper, model: str) -> dict:
         "OS_IDENTITY_API_VERSION": action_result.get("api-version"),
     }
 
+    action_cmd = "list-ca-certs"
+    try:
+        action_result = run_sync(jhelper.run_action(unit, model, action_cmd))
+    except ActionFailedException as e:
+        LOG.debug(f"Running action {action_cmd} on {unit} failed: {str(e)}")
+        raise click.ClickException("Unable to retrieve CA certs from Keystone service")
+
+    if action_result.get("return-code", 0) > 1:
+        raise click.ClickException("Unable to retrieve CA certs from Keystone service")
+
+    action_result.pop("return-code")
+    ca_bundle = []
+    for name, certs in action_result.items():
+        # certs = json.loads(certs)
+        ca = certs.get("ca")
+        chain = certs.get("chain")
+        if ca and ca not in ca_bundle:
+            ca_bundle.append(ca)
+        if chain and chain not in ca_bundle:
+            ca_bundle.append(chain)
+
+    bundle = "\n".join(ca_bundle)
+
+    if bundle:
+        home = os.environ.get("SNAP_REAL_HOME")
+        cafile = Path(home) / ".config" / "openstack" / "ca_bundle.pem"
+        LOG.debug("Writing CA bundle to {str(cafile)}")
+
+        cafile.parent.mkdir(mode=0o775, parents=True, exist_ok=True)
+        if not cafile.exists():
+            cafile.touch()
+        cafile.chmod(0o660)
+
+        with cafile.open("w") as file:
+            file.write(bundle)
+
+        params["OS_CACERT"] = str(cafile)
+
+    return params
+
 
 class SetHypervisorCharmConfigStep(BaseStep):
     """Update openstack-hypervisor charm config"""
 
     IPVANYNETWORK_UNSET = "0.0.0.0/0"
 
-    def __init__(self, jhelper, ext_network: Path):
+    def __init__(
+        self, client: Client, jhelper: JujuHelper, ext_network: Path, model: str
+    ):
         super().__init__(
             "Update charm config",
             "Updating openstack-hypervisor charm configuration",
         )
 
         # File path with external_network details in json format
-        self.ext_network_file = ext_network
-        self.ext_network = {}
-        self.client = Client()
+        self.client = client
         self.jhelper = jhelper
+        self.ext_network_file = ext_network
+        self.model = model
+        self.ext_network = {}
         self.charm_config = {}
 
     def has_prompts(self) -> bool:
@@ -335,13 +289,12 @@ class SetHypervisorCharmConfigStep(BaseStep):
             "physical_network"
         )
         try:
-            model = CONTROLLER_MODEL.split("/")[-1]
             LOG.debug(
                 f"Config to apply on openstack-hypervisor snap: {self.charm_config}"
             )
             run_sync(
                 self.jhelper.set_application_config(
-                    model,
+                    self.model,
                     "openstack-hypervisor",
                     self.charm_config,
                 )
@@ -356,14 +309,24 @@ class SetHypervisorCharmConfigStep(BaseStep):
 class UserOpenRCStep(BaseStep):
     """Generate openrc for created cloud user."""
 
-    def __init__(self, auth_url: str, auth_version: str, openrc: Path):
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        auth_url: str,
+        auth_version: str,
+        cacert: str | None = None,
+        openrc: Path | None = None,
+    ):
         super().__init__(
             "Generate admin openrc", "Generating openrc for cloud admin usage"
         )
+        self.client = client
+        self.tfhelper = tfhelper
         self.auth_url = auth_url
         self.auth_version = auth_version
+        self.cacert = cacert
         self.openrc = openrc
-        self.client = Client()
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -384,36 +347,27 @@ class UserOpenRCStep(BaseStep):
 
     def run(self, status: Optional["Status"] = None) -> Result:
         try:
-            snap = Snap()
-            terraform = str(snap.paths.snap / "bin" / "terraform")
-            cmd = [terraform, "output", "-json"]
-            LOG.debug(f'Running command {" ".join(cmd)}')
-            process = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                cwd=snap.paths.user_common / "etc" / "demo-setup",
-            )
+            tf_output = self.tfhelper.output(hide_output=True)
             # Mask any passwords before printing process.stdout
-            tf_output = json.loads(process.stdout)
             self._print_openrc(tf_output)
             return Result(ResultType.COMPLETED)
-        except subprocess.CalledProcessError as e:
-            LOG.exception("Error initializing Terraform")
+        except TerraformException as e:
+            LOG.exception("Error getting terraform output")
             return Result(ResultType.FAILED, str(e))
 
     def _print_openrc(self, tf_output: dict) -> None:
         """Print openrc to console and save to disk using provided information"""
-        _openrc = f"""# openrc for {tf_output["OS_USERNAME"]["value"]}
+        _openrc = f"""# openrc for {tf_output["OS_USERNAME"]}
 export OS_AUTH_URL={self.auth_url}
-export OS_USERNAME={tf_output["OS_USERNAME"]["value"]}
-export OS_PASSWORD={tf_output["OS_PASSWORD"]["value"]}
-export OS_USER_DOMAIN_NAME={tf_output["OS_USER_DOMAIN_NAME"]["value"]}
-export OS_PROJECT_DOMAIN_NAME={tf_output["OS_PROJECT_DOMAIN_NAME"]["value"]}
-export OS_PROJECT_NAME={tf_output["OS_PROJECT_NAME"]["value"]}
+export OS_USERNAME={tf_output["OS_USERNAME"]}
+export OS_PASSWORD={tf_output["OS_PASSWORD"]}
+export OS_USER_DOMAIN_NAME={tf_output["OS_USER_DOMAIN_NAME"]}
+export OS_PROJECT_DOMAIN_NAME={tf_output["OS_PROJECT_DOMAIN_NAME"]}
+export OS_PROJECT_NAME={tf_output["OS_PROJECT_NAME"]}
 export OS_AUTH_VERSION={self.auth_version}
 export OS_IDENTITY_API_VERSION={self.auth_version}"""
+        if self.cacert:
+            _openrc = f"{_openrc}\nexport OS_CACERT={self.cacert}"
         if self.openrc:
             message = f"Writing openrc to {self.openrc} ... "
             console.status(message)
@@ -430,16 +384,17 @@ class UserQuestions(BaseStep):
 
     def __init__(
         self,
-        answer_file: str,
-        preseed_file: str = None,
+        client: Client,
+        answer_file: Path,
+        deployment_preseed: dict | None = None,
         accept_defaults: bool = False,
     ):
         super().__init__(
             "Collect cloud configuration", "Collecting cloud configuration"
         )
+        self.client = client
         self.accept_defaults = accept_defaults
-        self.preseed_file = preseed_file
-        self.client = Client()
+        self.preseed = deployment_preseed or {}
         self.answer_file = answer_file
 
     def has_prompts(self) -> bool:
@@ -459,14 +414,11 @@ class UserQuestions(BaseStep):
         for section in ["user", "external_network"]:
             if not self.variables.get(section):
                 self.variables[section] = {}
-        if self.preseed_file:
-            preseed = sunbeam.jobs.questions.read_preseed(Path(self.preseed_file))
-        else:
-            preseed = {}
+
         user_bank = sunbeam.jobs.questions.QuestionBank(
             questions=user_questions(),
             console=console,
-            preseed=preseed.get("user"),
+            preseed=self.preseed.get("user"),
             previous_answers=self.variables.get("user"),
             accept_defaults=self.accept_defaults,
         )
@@ -478,7 +430,7 @@ class UserQuestions(BaseStep):
             ext_net_bank = sunbeam.jobs.questions.QuestionBank(
                 questions=ext_net_questions_local_only(),
                 console=console,
-                preseed=preseed.get("external_network"),
+                preseed=self.preseed.get("external_network"),
                 previous_answers=self.variables.get("external_network"),
                 accept_defaults=self.accept_defaults,
             )
@@ -486,7 +438,7 @@ class UserQuestions(BaseStep):
             ext_net_bank = sunbeam.jobs.questions.QuestionBank(
                 questions=ext_net_questions(),
                 console=console,
-                preseed=preseed.get("external_network"),
+                preseed=self.preseed.get("external_network"),
                 previous_answers=self.variables.get("external_network"),
                 accept_defaults=self.accept_defaults,
             )
@@ -558,8 +510,9 @@ class DemoSetup(BaseStep):
 
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
-        answer_file: str,
+        answer_file: Path,
     ):
         super().__init__(
             "Create demonstration configuration",
@@ -567,7 +520,7 @@ class DemoSetup(BaseStep):
         )
         self.answer_file = answer_file
         self.tfhelper = tfhelper
-        self.client = Client()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -600,11 +553,12 @@ class DemoSetup(BaseStep):
 class TerraformDemoInitStep(TerraformInitStep):
     def __init__(
         self,
+        client: Client,
         tfhelper: TerraformHelper,
     ):
         super().__init__(tfhelper)
         self.tfhelper = tfhelper
-        self.client = Client()
+        self.client = client
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -621,183 +575,79 @@ class TerraformDemoInitStep(TerraformInitStep):
             return Result(ResultType.SKIPPED)
 
 
-class SetLocalHypervisorOptions(BaseStep):
+class SetHypervisorUnitsOptionsStep(BaseStep):
     def __init__(
-        self, name, jhelper, join_mode: bool = False, preseed_file: Path = None
+        self,
+        client: Client,
+        names: list[str] | str,
+        jhelper: JujuHelper,
+        model: str,
+        deployment_preseed: dict | None = None,
+        msg: str = "Apply hypervisor settings",
+        description: str = "Applying hypervisor settings",
     ):
-        super().__init__(
-            "Apply local hypervisor settings", "Applying local hypervisor settings"
-        )
-        self.name = name
+        super().__init__(msg, description)
+        self.client = client
+        if isinstance(names, str):
+            names = [names]
+        self.names = names
         self.jhelper = jhelper
-        self.join_mode = join_mode
-        self.preseed_file = preseed_file
-        self.client = Client()
-        self.preseed_file = preseed_file
-
-    def has_prompts(self) -> bool:
-        return True
-
-    def prompt_for_nic(self) -> None:
-        """Prompt user for nic to use and do some validation."""
-        local_hypervisor_bank = sunbeam.jobs.questions.QuestionBank(
-            questions=local_hypervisor_questions(),
-            console=console,
-            accept_defaults=False,
-        )
-        nic = None
-        while True:
-            nic = local_hypervisor_bank.nic.ask()
-            if utils.is_configured(nic):
-                agree_nic_up = sunbeam.jobs.questions.ConfirmQuestion(
-                    f"WARNING: Interface {nic} is configured. Any "
-                    "configuration will be lost, are you sure you want to "
-                    "continue?"
-                ).ask()
-                if not agree_nic_up:
-                    continue
-            if utils.is_nic_up(nic) and not utils.is_nic_connected(nic):
-                agree_nic_no_link = sunbeam.jobs.questions.ConfirmQuestion(
-                    f"WARNING: Interface {nic} is not connected. Are "
-                    "you sure you want to continue?"
-                ).ask()
-                if not agree_nic_no_link:
-                    continue
-            break
-        return nic
-
-    def prompt(self, console: Optional[Console] = None) -> None:
-        self.nic = None
-        # If adding a node before configure step has run then answers will
-        # not be populated yet.
-        self.variables = sunbeam.jobs.questions.load_answers(
-            self.client, CLOUD_CONFIG_SECTION
-        )
-        remote_access_location = self.variables.get("user", {}).get(
-            "remote_access_location"
-        )
-        if self.preseed_file:
-            preseed = sunbeam.jobs.questions.read_preseed(self.preseed_file)
-        else:
-            preseed = {}
-        # If adding new nodes to the cluster then local access makes no sense
-        # so always prompt for the nic.
-        if self.join_mode or remote_access_location == utils.REMOTE_ACCESS:
-            ext_net_preseed = preseed.get("external_network", {})
-            # If nic is in the preseed assume the user knows what they are doing and
-            # bypass validation
-            if ext_net_preseed.get("nic"):
-                self.nic = ext_net_preseed.get("nic")
-            else:
-                self.nic = self.prompt_for_nic()
+        self.model = model
+        self.preseed = deployment_preseed or {}
+        self.nics: dict[str, str | None] = {}
 
     def run(self, status: Optional[Status] = None) -> Result:
-        if not self.nic:
-            return Result(ResultType.COMPLETED)
-        node = self.client.cluster.get_node_info(self.name)
-        self.machine_id = str(node.get("machineid"))
         app = "openstack-hypervisor"
         action_cmd = "set-hypervisor-local-settings"
-        model = CONTROLLER_MODEL.split("/")[-1]
-        unit = run_sync(self.jhelper.get_unit_from_machine(app, self.machine_id, model))
-        action_result = run_sync(
-            self.jhelper.run_action(
-                unit.entity_id,
-                model,
-                action_cmd,
-                action_params={
-                    "external-nic": self.nic,
-                },
+        for name in self.names:
+            self.update_status(status, f"setting hypervisor configuration for {name}")
+            nic = self.nics.get(name)
+            if nic is None:
+                LOG.debug(f"No NIC found for hypervisor {name}, skipping.")
+                continue
+            node = self.client.cluster.get_node_info(name)
+            self.machine_id = str(node.get("machineid"))
+            unit = run_sync(
+                self.jhelper.get_unit_from_machine(app, self.machine_id, self.model)
             )
-        )
-
-        if action_result.get("return-code", 0) > 1:
-            _message = "Unable to set local hypervisor configuration"
-            return Result(ResultType.FAILED, _message)
+            action_result = run_sync(
+                self.jhelper.run_action(
+                    unit.entity_id,
+                    self.model,
+                    action_cmd,
+                    action_params={
+                        "external-nic": nic,
+                    },
+                )
+            )
+            if action_result.get("return-code", 0) > 1:
+                _message = "Unable to set hypervisor {name!r} configuration"
+                return Result(ResultType.FAILED, _message)
         return Result(ResultType.COMPLETED)
 
 
-def _configure(
-    openrc: Optional[Path] = None,
-    preseed: Optional[Path] = None,
-    accept_defaults: bool = False,
-):
-    preflight_checks = []
-    preflight_checks.append(DaemonGroupCheck())
-    preflight_checks.append(VerifyBootstrappedCheck())
-    run_preflight_checks(preflight_checks, console)
+def _sorter(name):
+    if name == "deployment":
+        return 0
+    return 1
 
-    name = utils.get_fqdn()
-    snap = Snap()
-    src = snap.paths.snap / "etc" / "demo-setup/"
-    dst = snap.paths.user_common / "etc" / "demo-setup"
-    try:
-        os.mkdir(dst)
-    except FileExistsError:
-        pass
-    # NOTE: install to user writable location
-    LOG.debug(f"Updating {dst} from {src}...")
-    shutil.copytree(src, dst, dirs_exist_ok=True)
 
-    data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
-    try:
-        run_sync(jhelper.get_model(OPENSTACK_MODEL))
-    except ModelNotFoundException:
-        LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
-        raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
-    admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
-    tfhelper = TerraformHelper(
-        path=snap.paths.user_common / "etc" / "demo-setup",
-        env=admin_credentials,
-        plan="demo-setup",
-        backend="http",
-        data_location=data_location,
-    )
-    answer_file = tfhelper.path / "config.auto.tfvars.json"
-    plan = [
-        JujuLoginStep(data_location),
-        UserQuestions(
-            answer_file=answer_file,
-            preseed_file=preseed,
-            accept_defaults=accept_defaults,
-        ),
-        TerraformDemoInitStep(tfhelper),
-        DemoSetup(
-            tfhelper=tfhelper,
-            answer_file=answer_file,
-        ),
-        UserOpenRCStep(
-            auth_url=admin_credentials["OS_AUTH_URL"],
-            auth_version=admin_credentials["OS_AUTH_VERSION"],
-            openrc=openrc,
-        ),
-        SetHypervisorCharmConfigStep(jhelper, ext_network=answer_file),
-    ]
-    compute_nodenames = [
-        node["name"] for node in Client().cluster.list_nodes_by_role("compute")
-    ]
-    if name in compute_nodenames:
-        plan.append(
-            SetLocalHypervisorOptions(
-                name,
-                jhelper,
-                # Accept preseed file but do not allow 'accept_defaults' as nic
-                # selection may vary from machine to machine and is potentially
-                # destructive if it takes over an unintended nic.
-                preseed_file=preseed,
-            )
-        )
-    run_plan(plan, console)
+def _keep_cmd_params(cmd: click.Command, params: dict) -> dict:
+    """Keep parameters from parent context that are in the command."""
+    out_params = {}
+    for param in cmd.params:
+        if param.name in params:
+            out_params[param.name] = params[param.name]
+    return out_params
 
 
 @click.group(invoke_without_command=True)
 @click.pass_context
 @click.option("-a", "--accept-defaults", help="Accept all defaults.", is_flag=True)
 @click.option(
-    "-p",
-    "--preseed",
-    help="Preseed file.",
+    "-m",
+    "--manifest",
+    help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.option(
@@ -809,14 +659,15 @@ def _configure(
 def configure(
     ctx: click.Context,
     openrc: Optional[Path] = None,
-    preseed: Optional[Path] = None,
+    manifest: Optional[Path] = None,
     accept_defaults: bool = False,
 ) -> None:
     """Configure cloud with some sensible defaults."""
     if ctx.invoked_subcommand is not None:
         return
-    _configure(openrc, preseed, accept_defaults)
-    for name, command in configure.commands.items():
+    commands = configure.commands.items()
+    commands = sorted(commands, key=_sorter)
+    for name, command in commands:
         LOG.debug("Running configure %r", name)
         cmd_ctx = click.Context(
             command,
@@ -824,4 +675,5 @@ def configure(
             info_name=command.name,
             allow_extra_args=True,
         )
+        cmd_ctx.params = _keep_cmd_params(command, ctx.params)
         cmd_ctx.forward(command)

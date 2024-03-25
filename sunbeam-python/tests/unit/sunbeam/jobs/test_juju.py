@@ -14,7 +14,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 import yaml
@@ -88,6 +88,12 @@ users:
     username: admin
     password: fake-password
 """
+
+
+def _unit_getter(u, m):
+    mock = Mock()
+    mock.name = u
+    return mock
 
 
 @pytest.fixture
@@ -364,7 +370,7 @@ async def test_jhelper_add_unit_to_missing_application(
     model = "control-plane"
     with pytest.raises(
         juju.ApplicationNotFoundException,
-        match=f"Application {name!r} is missing from model {model!r}",
+        match=f"Application missing from model: {model!r}",
     ):
         await jhelper.add_unit(name, model)
 
@@ -457,21 +463,21 @@ async def test_jhelper_add_k8s_cloud_unsupported_kubeconfig(jhelper: juju.JujuHe
 test_data_microk8s = [
     ("wait_application_ready", "microk8s", "application 'microk8s'", [["blocked"]]),
     (
-        "wait_unit_ready",
+        "wait_units_ready",
         "microk8s/0",
-        "unit 'microk8s/0'",
+        "units microk8s/0",
         [{"agent": "idle", "workload": "blocked"}],
     ),
 ]
 
 test_data_custom_status = [
     ("wait_application_ready", "macrok8s", ["unknown"]),
-    ("wait_unit_ready", "microk8s/1", {"agent": "unknown", "workload": "unknown"}),
+    ("wait_units_ready", "microk8s/1", {"agent": "unknown", "workload": "unknown"}),
 ]
 
 test_data_missing = [
     ("wait_application_ready", "mysql"),
-    ("wait_unit_ready", "mysql/0"),
+    ("wait_units_ready", "mysql/0"),
 ]
 
 
@@ -480,7 +486,8 @@ test_data_missing = [
 async def test_jhelper_wait_ready(
     jhelper: juju.JujuHelper, model: Model, method: str, entity: str, error: str, args
 ):
-    await getattr(jhelper, method)(entity, "control-plane")
+    with patch.object(jhelper, "get_unit", side_effect=_unit_getter):
+        await getattr(jhelper, method)(entity, "control-plane")
     assert model.block_until.call_count == 1
     assert model.block_until.result is True
 
@@ -493,7 +500,7 @@ async def test_jhelper_wait_application_ready_timeout(
     with pytest.raises(
         juju.TimeoutException,
         match=f"Timed out while waiting for {error} to be ready",
-    ):
+    ), patch.object(jhelper, "get_unit", side_effect=_unit_getter):
         await getattr(jhelper, method)(entity, "control-plane", *args)
     assert model.block_until.call_count == 1
     assert model.block_until.result is False
@@ -508,7 +515,8 @@ async def test_jhelper_wait_ready_custom_status(
     entity: str,
     status: list | dict,
 ):
-    await getattr(jhelper, method)(entity, "control-plane", accepted_status=status)
+    with patch.object(jhelper, "get_unit", side_effect=_unit_getter):
+        await getattr(jhelper, method)(entity, "control-plane", accepted_status=status)
     assert model.block_until.call_count == 1
     assert model.block_until.result is True
 
@@ -552,3 +560,16 @@ async def test_jhelper_wait_until_active_timed_out(jhelper: juju.JujuHelper, mod
     ):
         await jhelper.wait_until_active("control-plane")
     assert model.wait_for_idle.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_available_charm_revision(jhelper: juju.JujuHelper, model):
+    cmd_out = {"channel-map": {"legacy/edge": {"revision": {"version": "121"}}}}
+    with patch.object(juju, "CharmHub") as p:
+        charmhub = AsyncMock()
+        charmhub.info.return_value = cmd_out
+        p.return_value = charmhub
+        revno = await jhelper.get_available_charm_revision(
+            "openstack", "microk8s", "legacy/edge"
+        )
+        assert revno == 121

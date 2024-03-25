@@ -18,7 +18,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.8.0"
+      version = "= 0.10.1"
     }
   }
 
@@ -33,9 +33,12 @@ resource "juju_application" "sunbeam-machine" {
   units = length(var.machine_ids) # need to manage the number of units
 
   charm {
-    name    = "sunbeam-machine"
-    channel = var.charm_channel
-    series  = "jammy"
+    name     = "sunbeam-machine"
+    channel  = var.charm_channel
+    revision = var.charm_revision
+    base    = "ubuntu@22.04"
   }
+
+  config = var.charm_config
 
 }

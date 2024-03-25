@@ -31,7 +31,7 @@ def snap_env():
         "SNAP_INSTANCE_NAME": "",
         "SNAP_NAME": "mysnap",
         "SNAP_REVISION": "2",
-        "SNAP_USER_COMMON": "",
+        "SNAP_USER_COMMON": "/var/snap/mysnap/usercommon",
         "SNAP_USER_DATA": "",
         "SNAP_VERSION": "1.2.3",
         "SNAP_REAL_HOME": "/home/ubuntu",
@@ -59,6 +59,18 @@ def check_call():
 
 
 @pytest.fixture
+def check_output():
+    with patch("subprocess.check_output") as p:
+        yield p
+
+
+@pytest.fixture
 def environ():
     with patch("os.environ") as p:
+        yield p
+
+
+@pytest.fixture
+def copytree():
+    with patch("shutil.copytree") as p:
         yield p

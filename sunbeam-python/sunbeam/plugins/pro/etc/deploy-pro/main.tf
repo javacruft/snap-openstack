@@ -18,7 +18,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = "= 0.8.0"
+      version = "= 0.10.1"
     }
   }
 
@@ -39,7 +39,7 @@ resource "juju_application" "ubuntu_pro" {
   charm {
     name    = "ubuntu-advantage"
     channel = var.ubuntu-advantage-channel
-    series  = "jammy"
+    base    = "ubuntu@22.04"
   }
 
   config = {

@@ -41,6 +41,114 @@ variable "cos-channel" {
   default     = "1.0/stable"
 }
 
+variable "traefik-channel" {
+  description = "Operator channel for COS Lite Traefik deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "traefik-revision" {
+  description = "Operator channel revision for COS Lite Traefik deployment"
+  type        = number
+  default     = null
+}
+
+variable "traefik-config" {
+  description = "Operator config for COS Lite Traefik deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "alertmanager-channel" {
+  description = "Operator channel for COS Lite Alert Manager deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "alertmanager-revision" {
+  description = "Operator channel revision for COS Lite Alert Manager deployment"
+  type        = number
+  default     = null
+}
+
+variable "alertmanager-config" {
+  description = "Operator config for COS Lite Alert Manager deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "prometheus-channel" {
+  description = "Operator channel for COS Lite Prometheus deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "prometheus-revision" {
+  description = "Operator channel revision for COS Lite Prometheus deployment"
+  type        = number
+  default     = null
+}
+
+variable "prometheus-config" {
+  description = "Operator config for COS Lite Prometheus deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "grafana-channel" {
+  description = "Operator channel for COS Lite Grafana deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "grafana-revision" {
+  description = "Operator channel revision for COS Lite Grafana deployment"
+  type        = number
+  default     = null
+}
+
+variable "grafana-config" {
+  description = "Operator config for COS Lite Grafana deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "catalogue-channel" {
+  description = "Operator channel for COS Lite Catalogue deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "catalogue-revision" {
+  description = "Operator channel revision for COS Lite Catalogue deployment"
+  type        = number
+  default     = null
+}
+
+variable "catalogue-config" {
+  description = "Operator config for COS Lite Catalogue deployment"
+  type        = map(string)
+  default     = {}
+}
+
+variable "loki-channel" {
+  description = "Operator channel for COS Lite Loki deployment"
+  type        = string
+  default     = "1.0/stable"
+}
+
+variable "loki-revision" {
+  description = "Operator channel revision for COS Lite Loki deployment"
+  type        = number
+  default     = null
+}
+
+variable "loki-config" {
+  description = "Operator config for COS Lite Loki deployment"
+  type        = map(string)
+  default     = {}
+}
+
 variable "ingress-scale" {
   description = "Scale of ingress deployment"
   default     = 1

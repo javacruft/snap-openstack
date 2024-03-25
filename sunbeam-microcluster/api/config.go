@@ -11,16 +11,16 @@ import (
 	"github.com/canonical/microcluster/state"
 	"github.com/gorilla/mux"
 
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/sunbeam"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/sunbeam"
 )
 
 // /1.0/config/<name> endpoint.
 var configCmd = rest.Endpoint{
 	Path: "config/{key}",
 
-	Get:    rest.EndpointAction{Handler: cmdConfigGet, ProxyTarget: true},
-	Put:    rest.EndpointAction{Handler: cmdConfigPut, ProxyTarget: true},
-	Delete: rest.EndpointAction{Handler: cmdConfigDelete, ProxyTarget: true},
+	Get:    rest.EndpointAction{Handler: cmdConfigGet, ProxyTarget: true, AllowUntrusted: true},
+	Put:    rest.EndpointAction{Handler: cmdConfigPut, ProxyTarget: true, AllowUntrusted: true},
+	Delete: rest.EndpointAction{Handler: cmdConfigDelete, ProxyTarget: true, AllowUntrusted: true},
 }
 
 func cmdConfigGet(s *state.State, r *http.Request) response.Response {

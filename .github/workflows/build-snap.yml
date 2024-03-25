@@ -47,7 +47,7 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
-          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults"
+          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults --manifest manifests/2023.2-candidate.yml"
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam cluster list"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
@@ -59,3 +59,6 @@ jobs:
           juju status
           juju status -m openstack
           juju debug-log -m openstack --replay
+      - name: Setup tmate session
+        if: ${{ failure() && runner.debug }}
+        uses: canonical/action-tmate@main

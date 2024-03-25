@@ -37,6 +37,7 @@ type Node struct {
 	Name      string `db:"primary=yes"`
 	Role      string
 	MachineID int
+	SystemID  string
 }
 
 // NodeFilter is a required struct for use with lxd-generate. It is used for filtering fields on database fetches.

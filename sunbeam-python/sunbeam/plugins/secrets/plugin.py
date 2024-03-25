@@ -16,14 +16,13 @@
 import click
 from packaging.version import Version
 
-from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.jobs.common import read_config
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.plugins.interface.v1.base import PluginRequirement
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
-from sunbeam.plugins.vault.plugin import VaultPlugin
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 
 class SecretsPlugin(OpenStackControlPlanePlugin):
@@ -31,11 +30,30 @@ class SecretsPlugin(OpenStackControlPlanePlugin):
 
     requires = {PluginRequirement("vault")}
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="secrets",
+            "secrets",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
+
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {"charms": {"barbican-k8s": {"channel": OPENSTACK_CHANNEL}}}
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "barbican-k8s": {
+                        "channel": "barbican-channel",
+                        "revision": "barbican-revision",
+                        "config": "barbican-config",
+                    }
+                }
+            }
+        }
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
@@ -49,7 +67,6 @@ class SecretsPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to enable the application."""
         return {
             "enable-barbican": True,
-            "barbican-channel": "2023.2/stable",
         }
 
     def set_tfvars_on_disable(self) -> dict:
@@ -59,20 +76,6 @@ class SecretsPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_resize(self) -> dict:
         """Set terraform variables to resize the application."""
         return {}
-
-    def pre_enable(self) -> None:
-        """Check Vault is deployed"""
-        super().pre_enable()
-        # TODO(gboutry): Remove this when plugin dependency is implemented
-        try:
-            vault_info = read_config(self.client, VaultPlugin().plugin_key)
-            enabled = vault_info.get("enabled", False)
-            if enabled == "false":
-                raise ValueError("Vault plugin is not enabled")
-        except (ConfigItemNotFoundException, ValueError) as e:
-            raise click.ClickException(
-                "OpenStack Secrets plugin requires Vault plugin to be enabled"
-            ) from e
 
     @click.command()
     def enable_plugin(self) -> None:

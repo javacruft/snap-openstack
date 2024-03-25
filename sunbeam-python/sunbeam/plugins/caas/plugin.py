@@ -14,38 +14,50 @@
 # limitations under the License.
 
 import logging
-import shutil
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
 import click
 from packaging.version import Version
+from pydantic import Field
+from pydantic.dataclasses import dataclass
 from rich.console import Console
 from rich.status import Status
 
-from sunbeam.clusterd.service import (
-    ClusterServiceUnavailableException,
-    ConfigItemNotFoundException,
-)
+from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.commands.terraform import (
-    TerraformException,
-    TerraformHelper,
-    TerraformInitStep,
-)
-from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, run_plan
+from sunbeam.commands.terraform import TerraformException, TerraformInitStep
+from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
+from sunbeam.jobs.manifest import Manifest, SoftwareConfig
 from sunbeam.plugins.interface.v1.base import PluginRequirement
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
-from sunbeam.plugins.orchestration.plugin import OrchestrationPlugin
-from sunbeam.plugins.secrets.plugin import SecretsPlugin
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
+
+
+@dataclass
+class CaasConfig:
+    image_name: Optional[str] = Field(default=None, description="CAAS Image name")
+    image_url: Optional[str] = Field(
+        default=None, description="CAAS Image URL to upload to glance"
+    )
+    container_format: Optional[str] = Field(
+        default=None, description="Image container format"
+    )
+    disk_format: Optional[str] = Field(default=None, description="Image disk format")
+    properties: dict = Field(
+        default={}, description="Properties to set for image in glance"
+    )
 
 
 class CaasConfigureStep(BaseStep):
@@ -53,18 +65,41 @@ class CaasConfigureStep(BaseStep):
 
     def __init__(
         self,
-        tfhelper: TerraformHelper,
+        client: Client,
+        manifest: Manifest,
+        tfplan: str,
+        tfvar_map: dict,
     ):
         super().__init__(
             "Configure Container as a Service",
             "Configure Cloud for Container as a Service use",
         )
-        self.tfhelper = tfhelper
+        self.client = client
+        self.manifest = manifest
+        self.tfplan = tfplan
+        self.tfvar_map = tfvar_map
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Execute configuration using terraform."""
         try:
-            self.tfhelper.apply()
+            override_tfvars = {}
+            try:
+                manifest_caas_config = asdict(self.manifest.software_config.caas_config)
+                for caas_config_attribute, tfvar_name in (
+                    self.tfvar_map.get(self.tfplan, {}).get("caas_config", {}).items()
+                ):
+                    caas_config_attribute_ = manifest_caas_config.get(
+                        caas_config_attribute
+                    )
+                    if caas_config_attribute_:
+                        override_tfvars[tfvar_name] = caas_config_attribute_
+            except AttributeError:
+                # caas_config not defined in manifest, ignore
+                pass
+
+            self.manifest.update_tfvars_and_apply_tf(
+                self.client, tfplan=self.tfplan, override_tfvars=override_tfvars
+            )
         except TerraformException as e:
             LOG.exception("Error configuring Container as a Service plugin.")
             return Result(ResultType.FAILED, str(e))
@@ -80,12 +115,58 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         PluginRequirement("loadbalancer", optional=True),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="caas",
+            "caas",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
         self.configure_plan = "caas-setup"
+
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {
+            "charms": {
+                "magnum-k8s": {"channel": OPENSTACK_CHANNEL},
+            },
+            "terraform": {
+                self.configure_plan: {
+                    "source": Path(__file__).parent / "etc" / self.configure_plan
+                },
+            },
+        }
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "magnum-k8s": {
+                        "channel": "magnum-channel",
+                        "revision": "magnum-revision",
+                        "config": "magnum-config",
+                    }
+                }
+            },
+            self.configure_plan: {
+                "caas_config": {
+                    "image_name": "image-name",
+                    "image_url": "image-source-url",
+                    "container_format": "image-container-format",
+                    "disk_format": "image-disk-format",
+                    "properties": "image-properties",
+                }
+            },
+        }
+
+    def add_manifest_section(self, software_config: SoftwareConfig) -> None:
+        """Adds manifest section"""
+        try:
+            _caas_config = software_config.caas_config
+            software_config.caas_config = CaasConfig(**_caas_config)
+        except AttributeError:
+            # Attribute not defined in manifest
+            software_config.caas_config = CaasConfig()
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
@@ -98,7 +179,6 @@ class CaasPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "magnum-channel": "2023.2/stable",
             "enable-magnum": True,
             **self.add_horizon_plugin_to_tfvars("magnum"),
         }
@@ -114,32 +194,6 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         """Set terraform variables to resize the application."""
         return {}
 
-    def pre_enable(self) -> None:
-        """Check required plugins are enabled."""
-        super().pre_enable()
-        # TODO(gboutry): Remove this when plugin dependency is implemented
-        try:
-            secrets_info = read_config(self.client, SecretsPlugin().plugin_key)
-            enabled = secrets_info.get("enabled", False)
-            if enabled == "false":
-                raise ValueError("Secrets plugin is not enabled")
-        except (ConfigItemNotFoundException, ValueError) as e:
-            raise click.ClickException(
-                "OpenStack CaaS plugin requires Secrets plugin to be enabled"
-            ) from e
-        try:
-            orchestration_info = read_config(
-                self.client, OrchestrationPlugin().plugin_key
-            )
-            enabled = orchestration_info.get("enabled", False)
-            if enabled == "false":
-                raise ValueError("Orchestration plugin is not enabled")
-        except (ConfigItemNotFoundException, ValueError) as e:
-            raise click.ClickException(
-                "OpenStack Container as a Service plugin requires Orchestration"
-                " plugin to be enabled"
-            ) from e
-
     @click.command()
     def enable_plugin(self) -> None:
         """Enable Container as a Service plugin."""
@@ -153,24 +207,19 @@ class CaasPlugin(OpenStackControlPlanePlugin):
     @click.command()
     def configure(self):
         """Configure Cloud for Container as a Service use."""
-        src = Path(__file__).parent / "etc" / self.configure_plan
-        dst = self.snap.paths.user_common / "etc" / self.configure_plan
-        LOG.debug(f"Updating {dst} from {src}...")
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-
-        data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / self.configure_plan,
-            env=admin_credentials,
-            plan="caas-plan",
-            backend="http",
-            data_location=data_location,
-        )
+
+        tfhelper = self.manifest.get_tfhelper(self.configure_plan)
+        tfhelper.env = admin_credentials
         plan = [
             TerraformInitStep(tfhelper),
-            CaasConfigureStep(tfhelper),
+            CaasConfigureStep(
+                self.deployment.get_client(),
+                self.manifest,
+                self.configure_plan,
+                self.manifest_attributes_tfvar_map(),
+            ),
         ]
 
         run_plan(plan, console)

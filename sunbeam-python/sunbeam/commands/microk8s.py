@@ -15,7 +15,6 @@
 
 import ipaddress
 import logging
-from pathlib import Path
 from typing import Optional
 
 import yaml
@@ -25,11 +24,9 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.juju import JujuStepHelper
-from sunbeam.commands.terraform import TerraformHelper
 from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, update_config
 from sunbeam.jobs.juju import (
-    MODEL,
     ActionFailedException,
     ApplicationNotFoundException,
     JujuHelper,
@@ -37,8 +34,9 @@ from sunbeam.jobs.juju import (
     UnsupportedKubeconfigException,
     run_sync,
 )
+from sunbeam.jobs.manifest import Manifest
 from sunbeam.jobs.steps import (
-    AddMachineUnitStep,
+    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     RemoveMachineUnitStep,
 )
@@ -91,24 +89,29 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
 
     def __init__(
         self,
-        tfhelper: TerraformHelper,
+        client: Client,
+        manifest: Manifest,
         jhelper: JujuHelper,
-        preseed_file: Optional[Path] = None,
+        model: str,
+        deployment_preseed: dict | None = None,
         accept_defaults: bool = False,
+        refresh: bool = False,
     ):
         super().__init__(
-            tfhelper,
+            client,
+            manifest,
             jhelper,
             MICROK8S_CONFIG_KEY,
             APPLICATION,
-            MODEL,
+            model,
+            "microk8s-plan",
             "Deploy MicroK8S",
             "Deploying MicroK8S",
+            refresh,
         )
 
-        self.preseed_file = preseed_file
+        self.preseed = deployment_preseed or {}
         self.accept_defaults = accept_defaults
-        self.answer_file = self.tfhelper.path / "addons.auto.tfvars.json"
         self.variables = {}
 
     def get_application_timeout(self) -> int:
@@ -124,14 +127,10 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
         self.variables = questions.load_answers(self.client, self._ADDONS_CONFIG)
         self.variables.setdefault("addons", {})
 
-        if self.preseed_file:
-            preseed = questions.read_preseed(self.preseed_file)
-        else:
-            preseed = {}
         microk8s_addons_bank = questions.QuestionBank(
             questions=microk8s_addons_questions(),
             console=console,  # type: ignore
-            preseed=preseed.get("addons"),
+            preseed=self.preseed.get("addons"),
             previous_answers=self.variables.get("addons", {}),
             accept_defaults=self.accept_defaults,
         )
@@ -144,7 +143,9 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
         LOG.debug(self.variables)
         questions.write_answers(self.client, self._ADDONS_CONFIG, self.variables)
         # Write answers to terraform location as a separate variables file
-        self.tfhelper.write_tfvars(self.variables, self.answer_file)
+        tfhelper = self.manifest.get_tfhelper(self.tfplan)
+        answer_file = tfhelper.path / "addons.auto.tfvars.json"
+        tfhelper.write_tfvars(self.variables, answer_file)
 
     def has_prompts(self) -> bool:
         """Returns true if the step has prompts that it can ask the user.
@@ -152,19 +153,30 @@ class DeployMicrok8sApplicationStep(DeployMachineApplicationStep):
         :return: True if the step can ask the user for prompts,
                  False otherwise
         """
+        # No need to prompt for questions in case of refresh
+        if self.refresh:
+            return False
+
         return True
 
 
-class AddMicrok8sUnitStep(AddMachineUnitStep):
+class AddMicrok8sUnitsStep(AddMachineUnitsStep):
     """Add Microk8s Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+    def __init__(
+        self,
+        client: Client,
+        names: list[str] | str,
+        jhelper: JujuHelper,
+        model: str,
+    ):
         super().__init__(
-            name,
+            client,
+            names,
             jhelper,
             MICROK8S_CONFIG_KEY,
             APPLICATION,
-            MODEL,
+            model,
             "Add MicroK8S unit",
             "Adding MicroK8S unit to machine",
         )
@@ -176,13 +188,14 @@ class AddMicrok8sUnitStep(AddMachineUnitStep):
 class RemoveMicrok8sUnitStep(RemoveMachineUnitStep):
     """Remove Microk8s Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+    def __init__(self, client: Client, name: str, jhelper: JujuHelper, model: str):
         super().__init__(
+            client,
             name,
             jhelper,
             MICROK8S_CONFIG_KEY,
             APPLICATION,
-            MODEL,
+            model,
             "Remove MicroK8S unit",
             "Removing MicroK8S unit from machine",
         )
@@ -194,13 +207,13 @@ class RemoveMicrok8sUnitStep(RemoveMachineUnitStep):
 class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
     _CONFIG = MICROK8S_KUBECONFIG_KEY
 
-    def __init__(self, jhelper: JujuHelper):
+    def __init__(self, client: Client, jhelper: JujuHelper):
         super().__init__(
             "Add MicroK8S cloud", "Adding MicroK8S cloud to Juju controller"
         )
-
-        self.name = MICROK8S_CLOUD
+        self.client = client
         self.jhelper = jhelper
+        self.name = MICROK8S_CLOUD
         self.credential_name = f"{MICROK8S_CLOUD}{CREDENTIAL_SUFFIX}"
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
@@ -220,7 +233,7 @@ class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
     def run(self, status: Optional[Status] = None) -> Result:
         """Add microk8s clouds to Juju controller."""
         try:
-            kubeconfig = read_config(Client(), self._CONFIG)
+            kubeconfig = read_config(self.client, self._CONFIG)
             run_sync(
                 self.jhelper.add_k8s_cloud(self.name, self.credential_name, kubeconfig)
             )
@@ -234,12 +247,14 @@ class AddMicrok8sCloudStep(BaseStep, JujuStepHelper):
 class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
     _CONFIG = MICROK8S_KUBECONFIG_KEY
 
-    def __init__(self, jhelper: JujuHelper):
+    def __init__(self, client: Client, jhelper: JujuHelper, model: str):
         super().__init__(
             "Store MicroK8S config",
             "Storing MicroK8S configuration in sunbeam database",
         )
+        self.client = client
         self.jhelper = jhelper
+        self.model = model
 
     def is_skip(self, status: Optional[Status] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -248,7 +263,7 @@ class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
                 ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            read_config(Client(), self._CONFIG)
+            read_config(self.client, self._CONFIG)
         except ConfigItemNotFoundException:
             return Result(ResultType.COMPLETED)
 
@@ -257,15 +272,15 @@ class StoreMicrok8sConfigStep(BaseStep, JujuStepHelper):
     def run(self, status: Optional[Status] = None) -> Result:
         """Store MicroK8S config in clusterd."""
         try:
-            unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, MODEL))
-            result = run_sync(self.jhelper.run_action(unit, MODEL, "kubeconfig"))
+            unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
+            result = run_sync(self.jhelper.run_action(unit, self.model, "kubeconfig"))
             if not result.get("content"):
                 return Result(
                     ResultType.FAILED,
                     "ERROR: Failed to retrieve kubeconfig",
                 )
             kubeconfig = yaml.safe_load(result["content"])
-            update_config(Client(), self._CONFIG, kubeconfig)
+            update_config(self.client, self._CONFIG, kubeconfig)
         except (
             ApplicationNotFoundException,
             LeaderNotFoundException,

@@ -22,14 +22,18 @@ from rich.console import Console
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.openstack import OPENSTACK_MODEL, PatchLoadBalancerServicesStep
-from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
+from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import run_plan
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, run_sync
+from sunbeam.jobs.manifest import AddManifestStep
 from sunbeam.plugins.interface.v1.openstack import (
+    ApplicationChannelData,
     EnableOpenStackApplicationStep,
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
+from sunbeam.versions import BIND_CHANNEL, OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -43,28 +47,58 @@ class DnsPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
     nameservers: Optional[str]
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="dns",
+            "dns",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
         self.nameservers = None
 
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {
+            "charms": {
+                "designate-k8s": {"channel": OPENSTACK_CHANNEL},
+                "designate-bind-k8s": {"channel": BIND_CHANNEL},
+            }
+        }
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "designate-k8s": {
+                        "channel": "designate-channel",
+                        "revision": "designate-revision",
+                        "config": "designate-config",
+                    },
+                    "designate-bind-k8s": {
+                        "channel": "bind-channel",
+                        "revision": "bind-revision",
+                        "config": "bind-config",
+                    },
+                }
+            }
+        }
+
     def run_enable_plans(self) -> None:
         """Run plans to enable plugin."""
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
+
+        plan = []
+        if self.user_manifest:
+            plan.append(
+                AddManifestStep(self.deployment.get_client(), self.user_manifest)
+            )
+        plan.extend(
+            [
+                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+                EnableOpenStackApplicationStep(jhelper, self),
+                PatchBindLoadBalancerStep(self.deployment.get_client()),
+            ]
         )
-        jhelper = JujuHelper(data_location)
-        plan = [
-            TerraformInitStep(tfhelper),
-            EnableOpenStackApplicationStep(tfhelper, jhelper, self),
-            PatchBindLoadBalancerStep(),
-        ]
 
         run_plan(plan, console)
         click.echo(f"OpenStack {self.name!r} application enabled.")
@@ -130,8 +164,7 @@ class DnsPlugin(OpenStackControlPlanePlugin):
         """Fetch bind address from juju."""
         model = OPENSTACK_MODEL
         application = "bind"
-        data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         model_impl = await jhelper.get_model(model)
         status = await model_impl.get_status([application])
         if application not in status["applications"]:
@@ -167,7 +200,24 @@ class DnsPlugin(OpenStackControlPlanePlugin):
             commands.update(
                 {
                     "init": [{"name": "dns", "command": self.dns_groups}],
-                    "dns": [{"name": "address", "command": self.dns_address}],
+                    "init.dns": [{"name": "address", "command": self.dns_address}],
                 }
             )
         return commands
+
+    @property
+    def k8s_application_data(self):
+        return {
+            "designate": ApplicationChannelData(
+                channel=OPENSTACK_CHANNEL,
+                tfvars_channel_var=None,
+            ),
+            "bind": ApplicationChannelData(
+                channel="9/edge",
+                tfvars_channel_var=None,
+            ),
+        }
+
+    @property
+    def tfvars_channel_var(self):
+        return "designate-channel"
