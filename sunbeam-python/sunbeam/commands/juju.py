@@ -27,14 +27,21 @@ from typing import Optional
 import pexpect
 import pwgen
 import yaml
-from pyroute2 import Console
+from packaging import version
+from rich.console import Console
+from rich.status import Status
 from snaphelpers import Snap
 
 from sunbeam import utils
-from sunbeam.clusterd.client import Client as clusterClient
+from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.jobs import questions
-from sunbeam.jobs.common import BaseStep, Result, ResultType
+from sunbeam.jobs.common import (
+    BaseStep,
+    Result,
+    ResultType,
+    convert_proxy_to_model_configs,
+)
 from sunbeam.jobs.juju import (
     CONTROLLER_MODEL,
     ControllerNotFoundException,
@@ -44,10 +51,12 @@ from sunbeam.jobs.juju import (
     ModelNotFoundException,
     run_sync,
 )
+from sunbeam.versions import JUJU_BASE, JUJU_CHANNEL
 
 LOG = logging.getLogger(__name__)
 PEXPECT_TIMEOUT = 60
 BOOTSTRAP_CONFIG_KEY = "BootstrapAnswers"
+JUJU_CONTROLLER_CHARM = "juju-controller.charm"
 
 
 class JujuStepHelper:
@@ -81,9 +90,7 @@ class JujuStepHelper:
 
         LOG.debug(f'Running command {" ".join(cmd)}')
         process = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        LOG.debug(
-            f"Command finished. stdout={process.stdout}, " "stderr={process.stderr}"
-        )
+        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
 
         return json.loads(process.stdout.strip())
 
@@ -99,10 +106,13 @@ class JujuStepHelper:
             LOG.debug(f"Model {model_name} not found")
             return False
 
-    def get_clouds(self, cloud_type: str) -> list:
+    def get_clouds(self, cloud_type: str, local: bool = False) -> list:
         """Get clouds based on cloud type"""
         clouds = []
-        clouds_from_juju_cmd = self._juju_cmd("clouds")
+        cmd = ["clouds"]
+        if local:
+            cmd.append("--client")
+        clouds_from_juju_cmd = self._juju_cmd(*cmd)
         LOG.debug(f"Available clouds in juju are {clouds_from_juju_cmd.keys()}")
 
         for name, details in clouds_from_juju_cmd.items():
@@ -112,6 +122,17 @@ class JujuStepHelper:
         LOG.debug(f"There are {len(clouds)} {cloud_type} clouds available: {clouds}")
 
         return clouds
+
+    def get_credentials(
+        self, cloud: str | None = None, local: bool = False
+    ) -> dict[str, dict]:
+        """Get credentials."""
+        cmd = ["credentials"]
+        if local:
+            cmd.append("--client")
+        if cloud:
+            cmd.append(cloud)
+        return self._juju_cmd(*cmd)
 
     def get_controllers(self, clouds: list) -> list:
         """Get controllers hosted on given clouds"""
@@ -141,24 +162,18 @@ class JujuStepHelper:
             LOG.debug(e)
             raise ControllerNotFoundException() from e
 
-    def add_cloud(self, cloud_type: str, cloud_name: str) -> bool:
-        """Add cloud of type cloud_type."""
-        if cloud_type != "manual":
+    def add_cloud(self, name: str, cloud: dict) -> bool:
+        """Add cloud to client clouds."""
+        if cloud["clouds"][name]["type"] not in ("manual", "maas"):
             return False
 
-        cloud_yaml = {"clouds": {}}
-        cloud_yaml["clouds"][cloud_name] = {
-            "type": "manual",
-            "endpoint": utils.get_local_ip_by_default_route(),
-        }
-
         with tempfile.NamedTemporaryFile() as temp:
-            temp.write(yaml.dump(cloud_yaml).encode("utf-8"))
+            temp.write(yaml.dump(cloud).encode("utf-8"))
             temp.flush()
             cmd = [
                 self._get_juju_binary(),
                 "add-cloud",
-                cloud_name,
+                name,
                 "--file",
                 temp.name,
                 "--client",
@@ -171,6 +186,133 @@ class JujuStepHelper:
 
         return True
 
+    def add_credential(self, cloud: str, credential: dict):
+        """Add credential to client credentials."""
+        with tempfile.NamedTemporaryFile() as temp:
+            temp.write(yaml.dump(credential).encode("utf-8"))
+            temp.flush()
+            cmd = [
+                self._get_juju_binary(),
+                "add-credential",
+                cloud,
+                "--file",
+                temp.name,
+                "--client",
+            ]
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+
+    def revision_update_needed(
+        self, application_name: str, model: str, status: dict | None = None
+    ) -> bool:
+        """Check if a revision update is available for an applicaton.
+
+        :param application_name: Name of application to check for updates for
+        :param model: Model application is in
+        :param status: Dictionay of model status
+        """
+        if not status:
+            _status = run_sync(self.jhelper.get_model_status_full(model))
+            status = json.loads(_status.to_json())
+        app_status = status["applications"].get(application_name, {})
+        if not app_status:
+            LOG.debug(f"{application_name} not present in model")
+            return False
+        deployed_revision = int(self._extract_charm_revision(app_status["charm"]))
+        charm_name = self._extract_charm_name(app_status["charm"])
+        deployed_channel = self.normalise_channel(app_status["charm-channel"])
+        if len(deployed_channel.split("/")) > 2:
+            LOG.debug(f"Cannot calculate upgrade for {application_name}, branch in use")
+            return False
+        available_revision = run_sync(
+            self.jhelper.get_available_charm_revision(
+                model, charm_name, deployed_channel
+            )
+        )
+        return bool(available_revision > deployed_revision)
+
+    def get_charm_deployed_versions(self, model: str) -> dict:
+        """Return charm deployed info for all the applications in model.
+
+        For each application, return a tuple of charm name, channel and revision.
+        Example output:
+        {"keystone": ("keystone-k8s", "2023.2/stable", 234)}
+        """
+        _status = run_sync(self.jhelper.get_model_status_full(model))
+        status = json.loads(_status.to_json())
+
+        apps = {}
+        for app_name, app_status in status.get("applications", {}).items():
+            charm_name = self._extract_charm_name(app_status["charm"])
+            deployed_channel = self.normalise_channel(app_status["charm-channel"])
+            deployed_revision = int(self._extract_charm_revision(app_status["charm"]))
+            apps[app_name] = (charm_name, deployed_channel, deployed_revision)
+
+        return apps
+
+    def get_apps_filter_by_charms(self, model: str, charms: list) -> list:
+        """Return apps filtered by given charms.
+
+        Get all apps from the model and return only the apps deployed with
+        charms in the provided list.
+        """
+        deployed_all_apps = self.get_charm_deployed_versions(model)
+        return [
+            app_name
+            for app_name, (charm, channel, revision) in deployed_all_apps.items()
+            if charm in charms
+        ]
+
+    def normalise_channel(self, channel: str) -> str:
+        """Expand channel if it is using abbreviation.
+
+        Juju supports abbreviating latest/{risk} to {risk}. This expands it.
+
+        :param channel: Channel string to normalise
+        """
+        if channel in ["stable", "candidate", "beta", "edge"]:
+            channel = f"latest/{channel}"
+        return channel
+
+    def _extract_charm_name(self, charm_url: str) -> str:
+        """Extract charm name from charm url.
+
+        :param charm_url: Url to examine
+        """
+        # XXX There must be a better way. ch:amd64/jammy/cinder-k8s-50 -> cinder-k8s
+        return charm_url.split("/")[-1].rsplit("-", maxsplit=1)[0]
+
+    def _extract_charm_revision(self, charm_url: str) -> str:
+        """Extract charm revision from charm url.
+
+        :param charm_url: Url to examine
+        """
+        return charm_url.split("-")[-1]
+
+    def channel_update_needed(self, channel: str, new_channel: str) -> bool:
+        """Compare two channels and see if the second is 'newer'.
+
+        :param current_channel: Current channel
+        :param new_channel: Proposed new channel
+        """
+        risks = ["stable", "candidate", "beta", "edge"]
+        current_channel = self.normalise_channel(channel)
+        current_track, current_risk = current_channel.split("/")
+        new_track, new_risk = new_channel.split("/")
+        if current_track != new_track:
+            try:
+                return version.parse(current_track) < version.parse(new_track)
+            except version.InvalidVersion:
+                LOG.error("Error: Could not compare tracks")
+                return False
+        if risks.index(current_risk) < risks.index(new_risk):
+            return True
+        else:
+            return False
+
 
 def bootstrap_questions():
     return {
@@ -181,6 +323,102 @@ def bootstrap_questions():
     }
 
 
+class AddCloudJujuStep(BaseStep, JujuStepHelper):
+    """Add cloud definition to juju client."""
+
+    def __init__(self, cloud: str, definition: dict):
+        super().__init__("Add Cloud", "Adding cloud to Juju client")
+
+        self.cloud = cloud
+        self.definition = definition
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        cloud_type = self.definition["clouds"][self.cloud]["type"]
+        try:
+            juju_clouds = self.get_clouds(cloud_type, local=True)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(
+                "Error determining whether to skip the bootstrap "
+                "process. Defaulting to not skip."
+            )
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+        if self.cloud in juju_clouds:
+            return Result(ResultType.SKIPPED)
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        try:
+            result = self.add_cloud(self.cloud, self.definition)
+            if not result:
+                return Result(ResultType.FAILED, "Unable to create cloud")
+        except subprocess.CalledProcessError as e:
+            LOG.exception("Error adding cloud to Juju")
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+        return Result(ResultType.COMPLETED)
+
+
+class AddCredentialsJujuStep(BaseStep, JujuStepHelper):
+    """Add credentials definition to juju client."""
+
+    def __init__(self, cloud: str, credentials: str, definition: dict):
+        super().__init__("Add Credentials", "Adding credentials to Juju client")
+
+        self.cloud = cloud
+        self.credentials_name = credentials
+        self.definition = definition
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                 ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        try:
+            credentials = self.get_credentials(self.cloud, local=True)
+        except subprocess.CalledProcessError as e:
+            LOG.exception(
+                "Error determining whether to skip the bootstrap "
+                "process. Defaulting to not skip."
+            )
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+        client_creds = credentials.get("client-credentials", {})
+        cloud_credentials = client_creds.get(self.cloud, {}).get(
+            "cloud-credentials", {}
+        )
+        if not cloud_credentials or self.credentials_name not in cloud_credentials:
+            return Result(ResultType.COMPLETED)
+        return Result(ResultType.SKIPPED)
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        try:
+            self.add_credential(self.cloud, self.definition)
+        except subprocess.CalledProcessError as e:
+            LOG.exception("Error adding credentials to Juju")
+            LOG.warning(e.stderr)
+            return Result(ResultType.FAILED, str(e))
+        return Result(ResultType.COMPLETED)
+
+
 class BootstrapJujuStep(BaseStep, JujuStepHelper):
     """Bootstraps the Juju controller."""
 
@@ -188,21 +426,26 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
-        cloud_name: str,
+        client: Client,
+        cloud: str,
         cloud_type: str,
         controller: str,
-        preseed_file: Optional[Path] = None,
+        bootstrap_args: list[str] | None = None,
+        deployment_preseed: dict | None = None,
+        proxy_settings: dict | None = None,
         accept_defaults: bool = False,
     ):
         super().__init__("Bootstrap Juju", "Bootstrapping Juju onto machine")
 
-        self.cloud = cloud_name
+        self.client = client
+        self.cloud = cloud
         self.cloud_type = cloud_type
         self.controller = controller
-        self.preseed_file = preseed_file
+        self.bootstrap_args = bootstrap_args or []
+        self.preseed = deployment_preseed or {}
+        self.proxy_settings = proxy_settings or {}
         self.accept_defaults = accept_defaults
         self.juju_clouds = []
-        self.client = clusterClient()
 
         home = os.environ.get("SNAP_REAL_HOME")
         os.environ["JUJU_DATA"] = f"{home}/.local/share/juju"
@@ -217,14 +460,10 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         self.variables = questions.load_answers(self.client, self._CONFIG)
         self.variables.setdefault("bootstrap", {})
 
-        if self.preseed_file:
-            preseed = questions.read_preseed(self.preseed_file)
-        else:
-            preseed = {}
         bootstrap_bank = questions.QuestionBank(
             questions=bootstrap_questions(),
             console=console,  # type: ignore
-            preseed=preseed.get("bootstrap"),
+            preseed=self.preseed.get("bootstrap"),
             previous_answers=self.variables.get("bootstrap", {}),
             accept_defaults=self.accept_defaults,
         )
@@ -251,13 +490,7 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
         try:
-            self.get_controller(self.controller)
-            return Result(ResultType.SKIPPED)
-        except ControllerNotFoundException as e:
-            LOG.debug(str(e))
-        try:
             self.juju_clouds = self.get_clouds(self.cloud_type)
-            return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
             LOG.exception(
                 "Error determining whether to skip the bootstrap "
@@ -265,6 +498,17 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
             )
             LOG.warning(e.stderr)
             return Result(ResultType.FAILED, str(e))
+        if self.cloud not in self.juju_clouds:
+            return Result(
+                ResultType.FAILED,
+                f"Cloud {self.cloud} of type {self.cloud_type!r} not found.",
+            )
+        try:
+            self.get_controller(self.controller)
+            return Result(ResultType.SKIPPED)
+        except ControllerNotFoundException as e:
+            LOG.debug(str(e))
+        return Result(ResultType.COMPLETED)
 
     def run(self, status: Optional["Status"] = None) -> Result:
         """Run the step to completion.
@@ -274,19 +518,47 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
         :return:
         """
         try:
-            if self.cloud not in self.juju_clouds:
-                result = self.add_cloud(self.cloud_type, self.cloud)
-                if not result:
-                    return Result(ResultType.FAILED, "Not able to create cloud")
-
             cmd = [
                 self._get_juju_binary(),
                 "bootstrap",
-                self.cloud,
-                self.controller,
             ]
-            LOG.debug(f'Running command {" ".join(cmd)}')
-            process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            cmd.extend(self.bootstrap_args)
+            cmd.extend([self.cloud, self.controller])
+            if "HTTP_PROXY" in self.proxy_settings:
+                cmd.extend(
+                    [
+                        "--config",
+                        f"juju-http-proxy={self.proxy_settings.get('HTTP_PROXY')}",
+                        "--config",
+                        f"snap-http-proxy={self.proxy_settings.get('HTTP_PROXY')}",
+                    ]
+                )
+            if "HTTPS_PROXY" in self.proxy_settings:
+                cmd.extend(
+                    [
+                        "--config",
+                        f"juju-https-proxy={self.proxy_settings.get('HTTPS_PROXY')}",
+                        "--config",
+                        f"snap-https-proxy={self.proxy_settings.get('HTTPS_PROXY')}",
+                    ]
+                )
+            if "NO_PROXY" in self.proxy_settings:
+                cmd.extend(
+                    ["--config", f"juju-no-proxy={self.proxy_settings.get('NO_PROXY')}"]
+                )
+
+            hidden_cmd = []
+            for arg in cmd:
+                if "admin-secret" in arg:
+                    option, _ = arg.split("=")
+                    arg = "=".join((option, "********"))
+                hidden_cmd.append(arg)
+            LOG.debug(f'Running command {" ".join(hidden_cmd)}')
+            env = os.environ.copy()
+            env.update(self.proxy_settings)
+            process = subprocess.run(
+                cmd, capture_output=True, text=True, check=True, env=env
+            )
             LOG.debug(
                 f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
             )
@@ -296,6 +568,52 @@ class BootstrapJujuStep(BaseStep, JujuStepHelper):
             LOG.exception("Error bootstrapping Juju")
             LOG.warning(e.stderr)
             return Result(ResultType.FAILED, str(e))
+
+
+class ScaleJujuStep(BaseStep, JujuStepHelper):
+    """Enable Juju HA."""
+
+    def __init__(
+        self, controller: str, n: int = 3, extra_args: list[str] | None = None
+    ):
+        super().__init__("Juju HA", "Enable Juju High Availability")
+        self.controller = controller
+        self.n = n
+        self.extra_args = extra_args or []
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not."""
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Status | None = None) -> Result:
+        """Enable Juju HA."""
+        cmd = [
+            self._get_juju_binary(),
+            "enable-ha",
+            "-n",
+            str(self.n),
+            *self.extra_args,
+        ]
+        LOG.debug(f'Running command {" ".join(cmd)}')
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        cmd = [
+            self._get_juju_binary(),
+            "wait-for",
+            "application",
+            "-m",
+            "controller",
+            "controller",
+            "--timeout",
+            "15m",
+        ]
+        self.update_status(status, "scaling controller")
+        LOG.debug("Waiting for HA to be enabled")
+        LOG.debug(f'Running command {" ".join(cmd)}')
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        LOG.debug(f"Command finished. stdout={process.stdout}, stderr={process.stderr}")
+        return Result(ResultType.COMPLETED)
 
 
 class CreateJujuUserStep(BaseStep, JujuStepHelper):
@@ -491,11 +809,17 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
     """Register user in juju."""
 
     def __init__(
-        self, name: str, controller: str, data_location: Path, replace: bool = False
+        self,
+        client: Client,
+        name: str,
+        controller: str,
+        data_location: Path,
+        replace: bool = False,
     ):
         super().__init__(
             "Register Juju User", f"Registering machine user {name} using token"
         )
+        self.client = client
         self.username = name
         self.controller = controller
         self.data_location = data_location
@@ -532,8 +856,7 @@ class RegisterJujuUserStep(BaseStep, JujuStepHelper):
             # Error is about no controller register, which is okay is this case
             pass
 
-        client = clusterClient()
-        user = client.cluster.get_juju_user(self.username)
+        user = self.client.cluster.get_juju_user(self.username)
         self.registration_token = user.get("token")
         return Result(ResultType.COMPLETED)
 
@@ -707,9 +1030,10 @@ class AddJujuMachineStep(BaseStep, JujuStepHelper):
 class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
     """Remove machine in juju."""
 
-    def __init__(self, name: str):
+    def __init__(self, client: Client, name: str):
         super().__init__("Remove machine", f"Removing machine {name} from Juju model")
 
+        self.client = client
         self.name = name
         self.machine_id = -1
 
@@ -722,9 +1046,8 @@ class RemoveJujuMachineStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        client = clusterClient()
         try:
-            node = client.cluster.get_node_info(self.name)
+            node = self.client.cluster.get_node_info(self.name)
             self.machine_id = node.get("machineid")
         except NodeNotExistInClusterException as e:
             return Result(ResultType.FAILED, str(e))
@@ -989,11 +1312,11 @@ class WriteCharmLogStep(BaseStep, JujuStepHelper):
 class JujuLoginStep(BaseStep, JujuStepHelper):
     """Login to Juju Controller"""
 
-    def __init__(self, data_location: Path):
+    def __init__(self, juju_account: JujuAccount | None):
         super().__init__(
             "Login to Juju controller", "Authenticating with Juju controller"
         )
-        self.data_location = data_location
+        self.juju_account = juju_account
 
     def is_skip(self, status: Optional["Status"] = None) -> Result:
         """Determines if the step should be skipped or not.
@@ -1001,10 +1324,7 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
         :return: ResultType.SKIPPED if the Step should be skipped,
                  ResultType.COMPLETED or ResultType.FAILED otherwise
         """
-        try:
-            self.juju_account = JujuAccount.load(self.data_location)
-            LOG.debug(f"Local account found: {self.juju_account.user}")
-        except JujuAccountNotFound:
+        if self.juju_account is None:
             LOG.debug("Local account not found, most likely not bootstrapped / joined")
             return Result(ResultType.SKIPPED)
 
@@ -1037,7 +1357,11 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
 
         :return:
         """
-
+        if self.juju_account is None:
+            return Result(
+                ResultType.FAILED,
+                "Juju account was supposed to be checked for in is_skip method.",
+            )
         cmd = " ".join(
             [
                 self._get_juju_binary(),
@@ -1060,3 +1384,122 @@ class JujuLoginStep(BaseStep, JujuStepHelper):
         if process.exitstatus != 0:
             return Result(ResultType.FAILED, "Failed to login to Juju Controller")
         return Result(ResultType.COMPLETED)
+
+
+class AddInfrastructureModelStep(BaseStep):
+    """Add infrastructure model."""
+
+    def __init__(
+        self, jhelper: JujuHelper, model: str, proxy_settings: dict | None = None
+    ):
+        super().__init__("Add infrastructure model", "Adding infrastructure model")
+        self.jhelper = jhelper
+        self.model = model
+        self.proxy_settings = proxy_settings or {}
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not."""
+        try:
+            run_sync(self.jhelper.get_model(self.model))
+            return Result(ResultType.SKIPPED)
+        except ModelNotFoundException:
+            LOG.debug(f"Model {self.model} not found")
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Add infrastructure model."""
+        try:
+            model_config = convert_proxy_to_model_configs(self.proxy_settings)
+            run_sync(self.jhelper.add_model(self.model, config=model_config))
+            return Result(ResultType.COMPLETED)
+        except Exception as e:
+            return Result(ResultType.FAILED, str(e))
+
+
+class UpdateJujuModelConfigStep(BaseStep):
+    """Update Model Config for the given models"""
+
+    def __init__(self, jhelper: JujuHelper, model: str, model_configs: dict):
+        super().__init__("Update Model Config", f"Updating model config for {model}")
+        self.jhelper = jhelper
+        self.model = model
+        self.model_configs = model_configs
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        try:
+            run_sync(self.jhelper.set_model_config(self.model, self.model_configs))
+        except ModelNotFoundException as e:
+            message = f"Update Model config on controller failed: {str(e)}"
+            return Result(ResultType.FAILED, message)
+
+        return Result(ResultType.COMPLETED)
+
+
+class DownloadJujuControllerCharmStep(BaseStep, JujuStepHelper):
+    """Download Juju Controller Charm"""
+
+    def __init__(self, proxy_settings: dict | None = None):
+        super().__init__(
+            "Download Controller Charm", "Downloading Juju Controller Charm"
+        )
+        self.proxy_settings = proxy_settings
+
+    def is_skip(self, status: Optional["Status"] = None) -> Result:
+        """Determines if the step should be skipped or not."""
+        if not self.proxy_settings:
+            return Result(ResultType.SKIPPED)
+
+        return Result(ResultType.COMPLETED)
+
+    def run(self, status: Optional["Status"] = None) -> Result:
+        """Run the step to completion.
+
+        Invoked when the step is run and returns a ResultType to indicate
+
+        :return:
+        """
+        try:
+            snap = Snap()
+            download_dir = snap.paths.user_common / "downloads"
+            download_dir.mkdir(parents=True, exist_ok=True)
+            rename_file = download_dir / JUJU_CONTROLLER_CHARM
+            for charm_file in download_dir.glob("juju-controller*.charm"):
+                charm_file.unlink()
+
+            cmd = [
+                self._get_juju_binary(),
+                "download",
+                "juju-controller",
+                "--channel",
+                JUJU_CHANNEL,
+                "--base",
+                JUJU_BASE,
+            ]
+            LOG.debug(f'Running command {" ".join(cmd)}')
+            env = os.environ.copy()
+            env.update(self.proxy_settings)
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                cwd=download_dir,
+                text=True,
+                check=True,
+                env=env,
+            )
+            LOG.debug(
+                f"Command finished. stdout={process.stdout}, stderr={process.stderr}"
+            )
+
+            for charm_file in download_dir.glob("juju-controller*.charm"):
+                charm_file.rename(rename_file)
+
+            return Result(ResultType.COMPLETED)
+        except subprocess.CalledProcessError as e:
+            LOG.exception("Error downloading Juju Controller charm")
+            return Result(ResultType.FAILED, str(e))

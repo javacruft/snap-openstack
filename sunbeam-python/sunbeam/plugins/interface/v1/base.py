@@ -25,9 +25,9 @@ from packaging.requirements import Requirement
 from packaging.version import Version
 from snaphelpers import Snap
 
-from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.jobs.common import read_config, update_config
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.plugins.interface import utils
 
@@ -65,12 +65,13 @@ class NotAutomaticPluginError(PluginError):
 class ClickInstantiator:
     """Support invoking click commands on instance methods."""
 
-    def __init__(self, command, klass):
+    def __init__(self, command, klass, client):
         self.command = command
         self.klass = klass
+        self.client = client
 
     def __call__(self, *args, **kwargs):
-        return self.command(self.klass(), *args, **kwargs)
+        return self.command(self.klass(self.client), *args, **kwargs)
 
 
 class BasePlugin(ABC):
@@ -82,13 +83,13 @@ class BasePlugin(ABC):
     # Version of plugin
     version = Version("0.0.0")
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, deployment: Deployment) -> None:
         """Constructor for Base plugin.
 
         :param name: Name of the plugin
         """
         self.name = name
-        self.client = Client()
+        self.deployment = deployment
 
     @property
     def plugin_key(self) -> str:
@@ -107,7 +108,7 @@ class BasePlugin(ABC):
         """
         pass
 
-    def upgrade_hook(self) -> None:
+    def upgrade_hook(self, upgrade_release: bool = False) -> None:
         """Upgrade hook for the plugin.
 
         snap-openstack upgrade hook handler invokes this function on all the
@@ -156,7 +157,7 @@ class BasePlugin(ABC):
                   uploded by plugin.
         """
         try:
-            return read_config(self.client, self.plugin_key)
+            return read_config(self.deployment.get_client(), self.plugin_key)
         except ConfigItemNotFoundException as e:
             LOG.debug(str(e))
             return {}
@@ -171,7 +172,7 @@ class BasePlugin(ABC):
         info_from_db = self.get_plugin_info()
         info_from_db.update(info)
         info_from_db.update({"version": str(self.version)})
-        update_config(self.client, self.plugin_key, info_from_db)
+        update_config(self.deployment.get_client(), self.plugin_key, info_from_db)
 
     def fetch_plugin_version(self, plugin: str) -> Version:
         """Fetch plugin version stored in database.
@@ -180,7 +181,9 @@ class BasePlugin(ABC):
         :returns: Version of the plugin
         """
         try:
-            config = read_config(self.client, self._get_plugin_key(plugin))
+            config = read_config(
+                self.deployment.get_client(), self._get_plugin_key(plugin)
+            )
         except ConfigItemNotFoundException as e:
             raise MissingPluginError(f"Plugin {plugin} not found") from e
         version = config.get("version")
@@ -188,6 +191,83 @@ class BasePlugin(ABC):
             raise MissingVersionInfoError(f"Version info for plugin {plugin} not found")
 
         return Version(version)
+
+    def manifest_defaults(self) -> dict:
+        """Return manifest part of the plugin.
+
+        Define manifest charms involved and default values for charm attributes
+        and terraform plan.
+        Sample manifest:
+        {
+            "charms": {
+                "heat-k8s": {
+                    "channel": <>.
+                    "revision": <>,
+                    "config": <>,
+                }
+            },
+            "terraform": {
+                "<plugin>-plan": {
+                    "source": <Path of terraform plan>,
+                }
+            }
+        }
+
+        The plugins that uses terraform plan should override this function.
+        """
+        return {}
+
+    def add_manifest_section(self, manifest) -> None:
+        """Add manifest section.
+
+        Any new attributes to the manifest introduced by the plugin will be read as
+        dict. This function should convert the new attribute to a dataclass if
+        required and reassign it to manifest object. This will also help in
+        validation of new attributes.
+        """
+        pass
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Return terraform var map for the manifest attributes.
+
+        Map terraform variable for each manifest attribute.
+        Sample return value:
+        {
+            <tf plan1>: {
+                "charms": {
+                    "heat-k8s": {
+                        "channel": <tfvar for heat channel>,
+                        "revision": <tfvar for heat revision>,
+                        "config": <tfvar for heat config>,
+                    }
+                }
+            },
+            <tfplan2>: {
+                "caas-config": {
+                    "image-url": <tfvar map for caas image url>
+                }
+            }
+        }
+
+        The plugins that uses terraform plan should override this function.
+        """
+        return {}
+
+    def preseed_questions_content(self) -> list:
+        """Generate preseed manifest content.
+
+        The returned content will be used in generation of manifest.
+        """
+        return []
+
+    def update_proxy_model_configs(self) -> None:
+        """Update proxy model configs.
+
+        Plugins that creates a new model should override this function
+        to update model-configs for the model.
+        Plugin can get proxies using get_proxy_settings(self.plugin.deployment)
+        """
+        pass
 
     def get_terraform_plans_base_path(self) -> Path:
         """Return Terraform plan base location."""
@@ -243,7 +323,10 @@ class BasePlugin(ABC):
 
         :returns: True if sunbeam cluster is bootstrapped, else False.
         """
-        return self.client.cluster.check_sunbeam_bootstrapped()
+        try:
+            return self.deployment.get_client().cluster.check_sunbeam_bootstrapped()
+        except ValueError:
+            return False
 
     @abstractmethod
     def commands(self) -> dict:
@@ -358,7 +441,9 @@ class BasePlugin(ABC):
                         )
                     continue
 
-                cmd.callback = ClickInstantiator(cmd.callback, type(self))
+                cmd.callback = ClickInstantiator(
+                    cmd.callback, type(self), self.deployment
+                )
                 group_obj.add_command(cmd, cmd_name)
                 LOG.debug(
                     f"Plugin {self.name}: Command {cmd_name} registered in "
@@ -369,7 +454,7 @@ class BasePlugin(ABC):
                 # commands within the plugin can be registered on group.
                 # This allows plugin to create new groups and commands in single place.
                 if isinstance(cmd, click.Group):
-                    groups[cmd_name] = cmd
+                    groups[f"{group}.{cmd_name}"] = cmd
 
 
 class PluginRequirement(Requirement):
@@ -411,12 +496,13 @@ class EnableDisablePlugin(BasePlugin):
 
     requires: set[PluginRequirement] = set()
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, deployment: Deployment) -> None:
         """Constructor for plugin interface.
 
         :param name: Name of the plugin
         """
-        super().__init__(name=name)
+        super().__init__(name, deployment)
+        self.user_manifest = None
 
     @property
     def enabled(self) -> bool:
@@ -516,7 +602,7 @@ class EnableDisablePlugin(BasePlugin):
         for klass in plugins:
             if not issubclass(klass, EnableDisablePlugin):
                 continue
-            plugin = klass()
+            plugin = klass(self.deployment)
             if not plugin.enabled:
                 continue
             for requirement in plugin.requires:
@@ -539,7 +625,7 @@ class EnableDisablePlugin(BasePlugin):
     def enable_requirements(self):
         """Iterate through requirements, enable plugins if possible."""
         for requirement in self.requires:
-            plugin = requirement.klass()
+            plugin = requirement.klass(self.deployment)
 
             if plugin.enabled:
                 self.check_enabled_requirement_is_compatible(requirement)
@@ -575,6 +661,16 @@ class EnableDisablePlugin(BasePlugin):
     @abstractmethod
     def enable_plugin(self) -> None:
         """Enable plugin command."""
+        self.user_manifest = None
+        current_click_context = click.get_current_context()
+        while current_click_context.parent is not None:
+            if (
+                current_click_context.parent.command.name == "enable"
+                and "manifest" in current_click_context.parent.params  # noqa: W503
+            ):
+                self.user_manifest = current_click_context.parent.params.get("manifest")
+            current_click_context = current_click_context.parent
+
         self.pre_enable()
         self.run_enable_plans()
         self.post_enable()

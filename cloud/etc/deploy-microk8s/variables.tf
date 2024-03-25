@@ -15,7 +15,20 @@
 
 variable "charm_microk8s_channel" {
   description = "Operator channel for microk8s deployment"
+  type        = string
   default     = "legacy/stable"
+}
+
+variable "charm_microk8s_revision" {
+  description = "Operator channel revision for microk8s deployment"
+  type        = number
+  default     = null
+}
+
+variable "charm_microk8s_config" {
+  description = "Operator config for microk8s deployment"
+  type        = map(string)
+  default     = {}
 }
 
 variable "microk8s_channel" {
@@ -27,6 +40,11 @@ variable "machine_ids" {
   description = "List of machine ids to include"
   type        = list(string)
   default     = []
+}
+
+variable "machine_model" {
+  description = "Model to deploy to"
+  type        = string
 }
 
 variable "addons" {

@@ -9,8 +9,8 @@ import (
 
 	"github.com/canonical/microcluster/state"
 
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/api/types"
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/database"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // ListNodes return all the nodes, filterable by role (Optional)
@@ -33,6 +33,7 @@ func ListNodes(s *state.State, roles []string) (types.Nodes, error) {
 				Name:      node.Name,
 				Role:      nodeRole,
 				MachineID: node.MachineID,
+				SystemID:  node.SystemID,
 			})
 		}
 
@@ -47,7 +48,7 @@ func ListNodes(s *state.State, roles []string) (types.Nodes, error) {
 
 // GetNode returns a Node with the given name
 func GetNode(s *state.State, name string) (types.Node, error) {
-	node := types.Node{}
+	node := types.Node{MachineID: -1}
 	err := s.Database.Transaction(s.Context, func(ctx context.Context, tx *sql.Tx) error {
 		record, err := database.GetNode(ctx, tx, name)
 		if err != nil {
@@ -61,6 +62,7 @@ func GetNode(s *state.State, name string) (types.Node, error) {
 		node.Name = record.Name
 		node.Role = nodeRole
 		node.MachineID = record.MachineID
+		node.SystemID = record.SystemID
 
 		return nil
 	})
@@ -69,14 +71,14 @@ func GetNode(s *state.State, name string) (types.Node, error) {
 }
 
 // AddNode adds a node to the database
-func AddNode(s *state.State, name string, role []string, machineid int) error {
+func AddNode(s *state.State, name string, role []string, machineid int, systemid string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
 	}
 	// Add node to the database.
 	err = s.Database.Transaction(s.Context, func(ctx context.Context, tx *sql.Tx) error {
-		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid})
+		_, err := database.CreateNode(ctx, tx, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid})
 		if err != nil {
 			return fmt.Errorf("Failed to record node: %w", err)
 		}
@@ -91,7 +93,7 @@ func AddNode(s *state.State, name string, role []string, machineid int) error {
 }
 
 // UpdateNode updates a node record in the database
-func UpdateNode(s *state.State, name string, role []string, machineid int) error {
+func UpdateNode(s *state.State, name string, role []string, machineid int, systemid string) error {
 	nodeRole, err := roleToStr(role)
 	if err != nil {
 		return err
@@ -106,11 +108,14 @@ func UpdateNode(s *state.State, name string, role []string, machineid int) error
 		if role == nil {
 			nodeRole = node.Role
 		}
-		if machineid == 0 {
+		if machineid == -1 {
 			machineid = node.MachineID
 		}
+		if systemid == "" {
+			systemid = node.SystemID
+		}
 
-		err = database.UpdateNode(ctx, tx, name, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid})
+		err = database.UpdateNode(ctx, tx, name, database.Node{Member: s.Name(), Name: name, Role: nodeRole, MachineID: machineid, SystemID: systemid})
 		if err != nil {
 			return fmt.Errorf("Failed to update record node: %w", err)
 		}

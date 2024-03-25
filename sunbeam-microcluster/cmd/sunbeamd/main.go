@@ -13,9 +13,9 @@ import (
 	"github.com/canonical/microcluster/state"
 	"github.com/spf13/cobra"
 
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/api"
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/database"
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/version"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/version"
 )
 
 // Debug indicates whether to log debug messages or not.
@@ -69,49 +69,49 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 	// Placeholder for post-action hooks that can be run by MicroCluster.
 	h := &config.Hooks{
 		// OnBootstrap is run after the daemon is initialized and bootstrapped.
-		OnBootstrap: func(s *state.State) error {
+		OnBootstrap: func(_ *state.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and bootstrapped")
 
 			return nil
 		},
 
 		// OnStart is run after the daemon is started.
-		OnStart: func(s *state.State) error {
+		OnStart: func(_ *state.State) error {
 			logger.Info("This is a hook that runs after the daemon first starts")
 
 			return nil
 		},
 
 		// PostJoin is run after the daemon is initialized and joins a cluster.
-		PostJoin: func(s *state.State) error {
+		PostJoin: func(_ *state.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and joins an existing cluster, after OnNewMember runs on all peers")
 
 			return nil
 		},
 
 		// PreJoin is run after the daemon is initialized and joins a cluster.
-		PreJoin: func(s *state.State) error {
+		PreJoin: func(_ *state.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and joins an existing cluster, before OnNewMember runs on all peers")
 
 			return nil
 		},
 
 		// PostRemove is run after the daemon is removed from a cluster.
-		PostRemove: func(s *state.State) error {
+		PostRemove: func(s *state.State, _ bool) error {
 			logger.Infof("This is a hook that is run on peer %q after a cluster member is removed", s.Name())
 
 			return nil
 		},
 
 		// PreRemove is run before the daemon is removed from the cluster.
-		PreRemove: func(s *state.State) error {
+		PreRemove: func(s *state.State, _ bool) error {
 			logger.Infof("This is a hook that is run on peer %q just before it is removed", s.Name())
 
 			return nil
 		},
 
 		// OnHeartbeat is run after a successful heartbeat round.
-		OnHeartbeat: func(s *state.State) error {
+		OnHeartbeat: func(_ *state.State) error {
 			logger.Info("This is a hook that is run on the dqlite leader after a successful heartbeat")
 
 			return nil
@@ -129,7 +129,7 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 }
 
 func init() {
-	rand.Seed(time.Now().UnixNano())
+	rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
 func main() {

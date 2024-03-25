@@ -16,15 +16,12 @@
 import click
 from rich.console import Console
 
+from sunbeam.versions import JUJU_CHANNEL, SUPPORTED_RELEASE
+
 console = Console()
 
 
-JUJU_CHANNEL = "3.2/stable"
-SUPPORTED_RELEASE = "jammy"
-
-PREPARE_NODE_TEMPLATE = f"""#!/bin/bash
-
-[ $(lsb_release -sc) != '{SUPPORTED_RELEASE}' ] && \
+PREPARE_NODE_TEMPLATE = f"""[ $(lsb_release -sc) != '{SUPPORTED_RELEASE}' ] && \
 {{ echo 'ERROR: Sunbeam deploy only supported on {SUPPORTED_RELEASE}'; exit 1; }}
 
 # :warning: Node Preparation for OpenStack Sunbeam :warning:
@@ -53,26 +50,31 @@ dpkg -s openssh-server &> /dev/null || {{
     sudo apt install -y openssh-server
 }}
 
-# Increase the number of inotify watchers per user
-echo "fs.inotify.max_user_instances = 1024" | sudo tee /etc/sysctl.d/80-sunbeam.conf
-sudo sysctl -q -p /etc/sysctl.d/80-sunbeam.conf
-
 # Connect snap to the ssh-keys interface to allow
 # read access to private keys - this supports bootstrap
 # of the Juju controller to the local machine via SSH.
 sudo snap connect openstack:ssh-keys
 
-# Add $USER to the snap_daemon group and adopt new permissions
-# supporting interaction with the sunbeam clustering daemon for
-# cluster operations.
+# Add $USER to the snap_daemon group supporting interaction
+# with the sunbeam clustering daemon for cluster operations.
 sudo addgroup $USER snap_daemon
-newgrp snap_daemon
 
 # Generate keypair and set-up prompt-less access to local machine
 [ -f $HOME/.ssh/id_rsa ] || ssh-keygen -b 4096 -f $HOME/.ssh/id_rsa -t rsa -N ""
 cat $HOME/.ssh/id_rsa.pub >> $HOME/.ssh/authorized_keys
 ssh-keyscan -H $(hostname --all-ip-addresses) >> $HOME/.ssh/known_hosts
 
+if ! grep -E 'HTTPS?_PROXY' /etc/environment &> /dev/null && \
+! curl -s -m 10 -x "" api.charmhub.io &> /dev/null; then
+    cat << EOF
+ERROR: No external connectivity. Set HTTP_PROXY, HTTPS_PROXY, NO_PROXY
+       in /etc/environment and re-run this command.
+EOF
+    exit 1
+fi
+"""
+
+COMMON_TEMPLATE = f"""
 # Install the Juju snap
 sudo snap install --channel {JUJU_CHANNEL} juju
 
@@ -83,6 +85,17 @@ mkdir -p $HOME/.config/openstack
 
 
 @click.command()
-def prepare_node_script() -> None:
+@click.option(
+    "--client",
+    "-c",
+    is_flag=True,
+    help="Prepare the node for use as a client.",
+    default=False,
+)
+def prepare_node_script(client: bool = False) -> None:
     """Generate script to prepare a node for Sunbeam use."""
-    console.print(PREPARE_NODE_TEMPLATE, soft_wrap=True)
+    script = "#!/bin/bash\n"
+    if not client:
+        script += PREPARE_NODE_TEMPLATE
+    script += COMMON_TEMPLATE
+    console.print(script, soft_wrap=True)

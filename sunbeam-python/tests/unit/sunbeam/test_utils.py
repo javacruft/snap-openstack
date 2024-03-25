@@ -11,10 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 import textwrap
+from dataclasses import InitVar
+from typing import Dict
 from unittest.mock import Mock, mock_open, patch
 
 import pytest
+from pydantic import PrivateAttr
+from pydantic.dataclasses import dataclass
 
 import sunbeam.utils as utils
 
@@ -52,6 +57,25 @@ def ifaddresses():
     with patch("sunbeam.utils.netifaces.ifaddresses") as p:
         p.side_effect = lambda nic: IFADDRESSES.get(nic)
         yield p
+
+
+@dataclass
+class B:
+    b_str: str | None = None
+    b_dict: dict | None = None
+
+
+@dataclass
+class A:
+    a_init: InitVar[str]
+    a_priv: str = PrivateAttr(default="a_priv")
+    a_int: int | None = None
+    a_str: str | None = None
+    a_dict: dict | None = None
+    a_dict_b: Dict[str, B] | None = None
+
+    def __post_init__(self, a_init):
+        self.a_priv = "a_priv"
 
 
 class TestUtils:
@@ -249,3 +273,27 @@ class TestUtils:
         generate_password = mocker.patch("sunbeam.utils.generate_password")
         generate_password.return_value = "abcdefghijkl"
         assert utils.generate_password() == "abcdefghijkl"
+
+    def test_asdict_with_extra_fields_no_extra_fields(self):
+        b = {"b_str": "b", "b_dict": {}}
+        b_dc = B(**b)
+        a = {"a_int": 1, "a_str": "a", "a_dict": {}, "a_dict_b": {"b1": b_dc}}
+        a_dc = A("initvar", **a)
+        a_dict_with_extra = utils.asdict_with_extra_fields(a_dc)
+
+        a_dict_expected = copy.deepcopy(a)
+        a_dict_expected["a_dict_b"]["b1"] = b
+        assert a_dict_with_extra == a_dict_expected
+
+    def test_asdict_with_extra_fields_with_extra_fields(self):
+        b = {"b_str": "b", "b_dict": {}}
+        b_dc = B(**b)
+        a = {"a_int": 1, "a_str": "a", "a_dict": {}, "a_dict_b": {"b1": b_dc}}
+        a_dc = A("initvar", **a)
+        a_dc.a_extra = "a_extra"
+        a_dict_with_extra = utils.asdict_with_extra_fields(a_dc)
+
+        a_dict_expected = copy.deepcopy(a)
+        a_dict_expected["a_dict_b"]["b1"] = b
+        a_dict_expected["a_extra"] = "a_extra"
+        assert a_dict_with_extra == a_dict_expected

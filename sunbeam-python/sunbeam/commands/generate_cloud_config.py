@@ -14,7 +14,6 @@
 # limitations under the License.
 
 
-import json
 import logging
 import os
 import shutil
@@ -27,12 +26,12 @@ import click
 import click.core
 import yaml
 from rich.console import Console
-from snaphelpers import Snap
 
 import sunbeam.jobs.questions
 from sunbeam.clusterd.client import Client
 from sunbeam.commands.configure import CLOUD_CONFIG_SECTION, retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
+from sunbeam.commands.terraform import TerraformHelper
 from sunbeam.jobs.checks import VerifyBootstrappedCheck
 from sunbeam.jobs.common import (
     BaseStep,
@@ -42,7 +41,9 @@ from sunbeam.jobs.common import (
     run_plan,
     run_preflight_checks,
 )
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
+from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -53,6 +54,8 @@ class GenerateCloudConfigStep(BaseStep):
 
     def __init__(
         self,
+        client: Client,
+        tfhelper: TerraformHelper,
         admin_credentials: dict,
         cloud: str,
         is_admin: bool,
@@ -62,12 +65,13 @@ class GenerateCloudConfigStep(BaseStep):
         super().__init__(
             "Generate clouds.yaml", "Generating clouds.yaml for cloud access"
         )
+        self.client = client
+        self.tfhelper = tfhelper
         self.admin_credentials = admin_credentials
         self.cloud = cloud
         self.is_admin = is_admin
         self.update = update
         self.cloudfile = cloudfile
-        self.client = Client()
 
         if not self.cloudfile:
             home = os.environ.get("SNAP_REAL_HOME")
@@ -100,19 +104,7 @@ class GenerateCloudConfigStep(BaseStep):
                 # pass emptydictionary for tf_output
                 self._print_cloud_config()
             else:
-                snap = Snap()
-                terraform = str(snap.paths.snap / "bin" / "terraform")
-                cmd = [terraform, "output", "-json"]
-                LOG.debug(f'Running command {" ".join(cmd)}')
-                process = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    cwd=snap.paths.user_common / "etc" / "demo-setup",
-                )
-                # Mask any passwords before printing process.stdout
-                tf_output = json.loads(process.stdout)
+                tf_output = self.tfhelper.output(hide_output=True)
                 self._print_cloud_config(tf_output)
             return Result(ResultType.COMPLETED)
         except subprocess.CalledProcessError as e:
@@ -143,16 +135,17 @@ class GenerateCloudConfigStep(BaseStep):
                 self.cloud: {
                     "auth": {
                         "auth_url": self.admin_credentials["OS_AUTH_URL"],
-                        "username": tf_output["OS_USERNAME"]["value"],
-                        "password": tf_output["OS_PASSWORD"]["value"],
-                        "user_domain_name": tf_output["OS_USER_DOMAIN_NAME"]["value"],
-                        "project_domain_name": tf_output["OS_PROJECT_DOMAIN_NAME"][
-                            "value"
-                        ],
-                        "project_name": tf_output["OS_PROJECT_NAME"]["value"],
+                        "username": tf_output["OS_USERNAME"],
+                        "password": tf_output["OS_PASSWORD"],
+                        "user_domain_name": tf_output["OS_USER_DOMAIN_NAME"],
+                        "project_domain_name": tf_output["OS_PROJECT_DOMAIN_NAME"],
+                        "project_name": tf_output["OS_PROJECT_NAME"],
                     },
                 },
             }
+
+        if self.admin_credentials.get("OS_CACERT"):
+            cloud_data[self.cloud]["cacert"] = self.admin_credentials["OS_CACERT"]
 
         return cloud_data
 
@@ -262,20 +255,28 @@ def cloud_config(
     if parameter_source == click.core.ParameterSource.DEFAULT and admin:
         cloud += "-admin"
 
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
     preflight_checks = []
-    preflight_checks.append(VerifyBootstrappedCheck())
+    preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
-    snap = Snap()
-    data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
+    manifest_obj = Manifest.load_latest_from_clusterdb(
+        deployment, include_defaults=True
+    )
+    jhelper = JujuHelper(deployment.get_connected_controller())
     try:
         run_sync(jhelper.get_model(OPENSTACK_MODEL))
     except ModelNotFoundException:
         LOG.error(f"Expected model {OPENSTACK_MODEL} missing")
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
+    tfplan = "demo-setup"
+    tfhelper = manifest_obj.get_tfhelper(tfplan)
+    tfhelper.env = (tfhelper.env or {}) | admin_credentials
     plan = [
         GenerateCloudConfigStep(
+            client=client,
+            tfhelper=tfhelper,
             admin_credentials=admin_credentials,
             cloud=cloud,
             is_admin=admin,

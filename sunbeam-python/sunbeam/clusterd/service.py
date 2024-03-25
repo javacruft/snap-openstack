@@ -15,12 +15,9 @@
 
 import logging
 from abc import ABC
-from urllib.parse import quote
 
 from requests.exceptions import ConnectionError, HTTPError
 from requests.sessions import Session
-from requests_unixsocket import DEFAULT_SCHEME
-from snaphelpers import Snap
 
 LOG = logging.getLogger(__name__)
 
@@ -45,6 +42,12 @@ class ClusterServiceUnavailableException(RemoteException):
 
 class ConfigItemNotFoundException(RemoteException):
     """Raise when ConfigItem cannot be found on the remote"""
+
+    pass
+
+
+class ManifestItemNotFoundException(RemoteException):
+    """Raise when ManifestItem cannot be found on the remote"""
 
     pass
 
@@ -94,7 +97,7 @@ class JujuUserNotFoundException(RemoteException):
 class BaseService(ABC):
     """BaseService is the base service class for sunbeam clusterd services."""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, endpoint: str):
         """Creates a new BaseService for the sunbeam clusterd API
 
         The service class is used to provide convenient APIs for clients to
@@ -105,13 +108,13 @@ class BaseService(ABC):
         :type: Session
         """
         self.__session = session
-        self._socket_path = Snap().paths.common / "state" / "control.socket"
+        self._endpoint = endpoint
 
     def _request(self, method, path, **kwargs):
         if path.startswith("/"):
             path = path[1:]
-        netloc = quote(str(self._socket_path), safe="")
-        url = f"{DEFAULT_SCHEME}{netloc}/{path}"
+        netloc = self._endpoint
+        url = f"{netloc}/{path}"
 
         try:
             LOG.debug("[%s] %s, args=%s", method, url, kwargs)
@@ -171,6 +174,8 @@ class BaseService(ABC):
                 )
             elif "ConfigItem not found" in error:
                 raise ConfigItemNotFoundException("ConfigItem not found")
+            elif "ManifestItem not found" in error:
+                raise ManifestItemNotFoundException("ManifestItem not found")
             raise e
 
         return response.json()

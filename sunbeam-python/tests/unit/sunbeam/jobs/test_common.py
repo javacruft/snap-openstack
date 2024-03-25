@@ -13,26 +13,129 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
+from unittest.mock import Mock, patch
 
-from sunbeam.jobs.common import Role
+import pytest
+
+from sunbeam.clusterd.service import ClusterServiceUnavailableException
+from sunbeam.jobs.common import Role, get_proxy_settings
 
 
-class TestRoles(unittest.TestCase):
+@pytest.fixture()
+def read_config():
+    with patch("sunbeam.jobs.common.read_config") as p:
+        yield p
+
+
+class TestRoles:
     def test_is_control(self):
-        self.assertTrue(Role.CONTROL.is_control_node())
-        self.assertFalse(Role.COMPUTE.is_control_node())
-        self.assertFalse(Role.STORAGE.is_control_node())
+        assert Role.CONTROL.is_control_node()
+        assert not Role.COMPUTE.is_control_node()
+        assert not Role.STORAGE.is_control_node()
 
     def test_is_compute(self):
-        self.assertFalse(Role.CONTROL.is_compute_node())
-        self.assertTrue(Role.COMPUTE.is_compute_node())
-        self.assertFalse(Role.STORAGE.is_control_node())
+        assert not Role.CONTROL.is_compute_node()
+        assert Role.COMPUTE.is_compute_node()
+        assert not Role.STORAGE.is_control_node()
 
     def test_is_storage(self):
-        self.assertFalse(Role.CONTROL.is_storage_node())
-        self.assertFalse(Role.COMPUTE.is_storage_node())
-        self.assertTrue(Role.STORAGE.is_storage_node())
+        assert not Role.CONTROL.is_storage_node()
+        assert not Role.COMPUTE.is_storage_node()
+        assert Role.STORAGE.is_storage_node()
+
+
+class TestProxy:
+    @pytest.mark.parametrize(
+        "test_input,expected_proxy",
+        [
+            ({"proxy": {}}, {}),
+            ({"proxy": {"proxy_required": False}}, {}),
+            (
+                {
+                    "proxy": {
+                        "proxy_required": False,
+                        "http_proxy": "http://squid.internal:3128",
+                    }
+                },
+                {},
+            ),
+            (
+                {
+                    "proxy": {
+                        "proxy_required": False,
+                        "http_proxy": "http://squid.internal:3128",
+                        "no_proxy": ".example.com",
+                    }
+                },
+                {},
+            ),
+            ({"proxy": {"proxy_required": True}}, {}),
+            (
+                {
+                    "proxy": {
+                        "proxy_required": True,
+                        "http_proxy": "http://squid.internal:3128",
+                    }
+                },
+                {"HTTP_PROXY": "http://squid.internal:3128"},
+            ),
+            (
+                {
+                    "proxy": {
+                        "proxy_required": True,
+                        "http_proxy": "http://squid.internal:3128",
+                        "no_proxy": ".example.com",
+                    }
+                },
+                {
+                    "HTTP_PROXY": "http://squid.internal:3128",
+                    "NO_PROXY": (
+                        "127.0.0.1,10.1.0.0/16,.example.com,.svc,localhost,10.152.183.0/24"  # noqa: E501
+                    ),
+                },
+            ),
+        ],
+    )
+    def test_get_proxy_settings(self, read_config, test_input, expected_proxy):
+        read_config.return_value = test_input
+        mock_deployment = Mock()
+        proxy = get_proxy_settings(mock_deployment)
+        assert expected_proxy.get("HTTP_PROXY") == proxy.get("HTTP_PROXY")
+        assert expected_proxy.get("HTTPS_PROXY") == proxy.get("HTTPS_PROXY")
+        expected_no_proxy_list = ",".split(expected_proxy.get("NO_PROXY"))
+        no_proxy_list = ",".split(proxy.get("NO_PROXY"))
+        assert expected_no_proxy_list == no_proxy_list
+
+    def test_get_proxy_settings_no_connection_to_clusterdb(self, read_config):
+        read_config.side_effect = ClusterServiceUnavailableException(
+            "Cluster unavailable.."
+        )
+        mock_deployment = Mock()
+        mock_deployment.get_default_proxy_settings.return_value = {}
+        proxy = get_proxy_settings(mock_deployment)
+        assert proxy == {}
+
+    def test_get_proxy_settings_no_connection_to_clusterdb_and_with_default_proxy(
+        self, read_config
+    ):
+        read_config.side_effect = ClusterServiceUnavailableException(
+            "Cluster unavailable.."
+        )
+        mock_deployment = Mock()
+        mock_deployment.get_default_proxy_settings.return_value = {
+            "HTTP_PROXY": "http://squid.internal:3128",
+            "NO_PROXY": ".example.com",
+        }
+        proxy = get_proxy_settings(mock_deployment)
+        expected_proxy = {
+            "HTTP_PROXY": "http://squid.internal:3128",
+            "NO_PROXY": (
+                "127.0.0.1,10.1.0.0/16,.example.com,.svc,localhost,10.152.183.0/24"
+            ),
+        }
+        expected_no_proxy_list = ",".split(expected_proxy.get("NO_PROXY"))
+        no_proxy_list = ",".split(proxy.get("NO_PROXY"))
+        assert expected_no_proxy_list == no_proxy_list
 
 
 if __name__ == "__main__":

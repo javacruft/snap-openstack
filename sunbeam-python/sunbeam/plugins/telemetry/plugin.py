@@ -20,15 +20,18 @@ from packaging.version import Version
 from rich.console import Console
 
 from sunbeam.commands.hypervisor import ReapplyHypervisorTerraformPlanStep
-from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
+from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import run_plan
-from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
+from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.juju import JujuHelper
+from sunbeam.jobs.manifest import AddManifestStep
 from sunbeam.plugins.interface.v1.openstack import (
     DisableOpenStackApplicationStep,
     EnableOpenStackApplicationStep,
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -37,79 +40,95 @@ console = Console()
 class TelemetryPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="telemetry",
+            "telemetry",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {
+            "charms": {
+                "aodh-k8s": {"channel": OPENSTACK_CHANNEL},
+                "gnocchi-k8s": {"channel": OPENSTACK_CHANNEL},
+                "ceilometer-k8s": {"channel": OPENSTACK_CHANNEL},
+                "openstack-exporter-k8s": {"channel": OPENSTACK_CHANNEL},
+            }
+        }
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "aodh-k8s": {
+                        "channel": "aodh-channel",
+                        "revision": "aodh-revision",
+                        "config": "aodh-config",
+                    },
+                    "gnocchi-k8s": {
+                        "channel": "gnocchi-channel",
+                        "revision": "gnocchi-revision",
+                        "config": "gnocchi-config",
+                    },
+                    "ceilometer-k8s": {
+                        "channel": "ceilometer-channel",
+                        "revision": "ceilometer-revision",
+                        "config": "ceilometer-config",
+                    },
+                    "openstack-exporter-k8s": {
+                        "channel": "openstack-exporter-channel",
+                        "revision": "openstack-exporter-revision",
+                        "config": "openstack-exporter-config",
+                    },
+                }
+            }
+        }
+
     def run_enable_plans(self) -> None:
         """Run plans to enable plugin."""
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
+
+        plan = []
+        if self.user_manifest:
+            plan.append(
+                AddManifestStep(self.deployment.get_client(), self.user_manifest)
+            )
+        plan.extend(
+            [
+                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+                EnableOpenStackApplicationStep(jhelper, self),
+                # No need to pass any extra terraform vars for this plugin
+                ReapplyHypervisorTerraformPlanStep(
+                    self.deployment.get_client(),
+                    self.manifest,
+                    jhelper,
+                    self.deployment.infrastructure_model,
+                ),
+            ]
         )
-        tfhelper_hypervisor_deploy = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / "deploy-openstack-hypervisor",
-            plan="hypervisor-plan",
-            backend="http",
-            data_location=data_location,
-        )
-        jhelper = JujuHelper(data_location)
-        plan = [
-            TerraformInitStep(tfhelper),
-            EnableOpenStackApplicationStep(tfhelper, jhelper, self),
-            # No need to pass any extra terraform vars for this plugin
-            ReapplyHypervisorTerraformPlanStep(tfhelper_hypervisor_deploy, jhelper),
-        ]
 
         run_plan(plan, console)
         click.echo(f"OpenStack {self.name} application enabled.")
 
     def run_disable_plans(self) -> None:
         """Run plans to disable the plugin."""
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
-        )
-        tfhelper_hypervisor_deploy = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / "deploy-openstack-hypervisor",
-            plan="hypervisor-plan",
-            backend="http",
-            data_location=data_location,
-        )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(tfhelper),
-            DisableOpenStackApplicationStep(tfhelper, jhelper, self),
-            ReapplyHypervisorTerraformPlanStep(tfhelper_hypervisor_deploy, jhelper),
+            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+            DisableOpenStackApplicationStep(jhelper, self),
+            ReapplyHypervisorTerraformPlanStep(
+                self.deployment.get_client(),
+                self.manifest,
+                jhelper,
+                self.deployment.infrastructure_model,
+            ),
         ]
 
         run_plan(plan, console)
         click.echo(f"OpenStack {self.name} application disabled.")
-
-    def _get_observability_offer_endpoints(self) -> dict:
-        """Fetch observability offers."""
-        data_location = self.snap.paths.user_data
-        jhelper = JujuHelper(data_location)
-        try:
-            model = run_sync(jhelper.get_model("observability"))
-        except ModelNotFoundException:
-            return {}
-        offer_query = run_sync(model.list_offers())
-        offer_vars = {}
-        for offer in offer_query["results"]:
-            if offer.offer_name == "grafana-dashboards":
-                offer_vars["grafana-dashboard-offer-url"] = offer.offer_url
-            if offer.offer_name == "prometheus-metrics-endpoint":
-                offer_vars["prometheus-metrics-offer-url"] = offer.offer_url
-        return offer_vars
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
@@ -119,7 +138,7 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
         if database_topology == "multi":
             apps.append("aodh-mysql")
 
-        if self.client.cluster.list_nodes_by_role("storage"):
+        if self.deployment.get_client().cluster.list_nodes_by_role("storage"):
             apps.extend(["ceilometer", "gnocchi", "gnocchi-mysql-router"])
             if database_topology == "multi":
                 apps.append("gnocchi-mysql")
@@ -129,9 +148,7 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
         return {
-            "telemetry-channel": "2023.2/stable",
             "enable-telemetry": True,
-            **self._get_observability_offer_endpoints(),
         }
 
     def set_tfvars_on_disable(self) -> dict:

@@ -67,3 +67,15 @@ sunbeam-plugins:
       path: sunbeam.plugins.ldap.plugin.LDAPPlugin
       supported_architectures:
         - amd64
+    - name: "ca"
+      version: "0.0.1"
+      description: "Plugin for TLS Manual Certificates"
+      path: sunbeam.plugins.ca.plugin.CaTlsPlugin
+      supported_architectures:
+        - amd64
+    - name: "validation"
+      version: "0.0.1"
+      description: "Plugin for integrating with tempest"
+      path: sunbeam.plugins.validation.plugin.ValidationPlugin
+      supported_architectures:
+        - amd64

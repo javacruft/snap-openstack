@@ -46,6 +46,7 @@ apps:
       - ssh-keys
       - dot-config-openstack
       - etc-openstack
+      - dot-local-share-openstack
     environment:
       PATH: $PATH:$SNAP/juju/bin
   terraform:
@@ -110,16 +111,16 @@ parts:
     source: ./sunbeam-microcluster
     source-type: local
     build-snaps:
-      - go
+      - go/1.21/stable
     build-environment:
-      - GOFLAGS: "-mod=readonly"
+      - GOFLAGS: -mod=readonly -ldflags=-s
     override-build: |
       set -ex
 
       # Setup build environment
       export CGO_CFLAGS="-I${SNAPCRAFT_STAGE}/include/ -I${SNAPCRAFT_STAGE}/usr/local/include/"
       export CGO_LDFLAGS="-L${SNAPCRAFT_STAGE}/lib/ -L${SNAPCRAFT_STAGE}/usr/local/lib/"
-      export CGO_LDFLAGS_ALLOW="(-Wl,-wrap,pthread_create)|(-Wl,-z,now)"
+      export CGO_LDFLAGS_ALLOW="(-Wl,-wrap,pthread_create)|(-Wl,-z,now)|(-s)"
 
       # Build the binaries
       go build -o "${SNAPCRAFT_PART_INSTALL}/bin/sunbeamd" -tags=libsqlite3 ./cmd/sunbeamd
@@ -256,6 +257,11 @@ plugs:
     interface: personal-files
     write:
       - $HOME/.local/share/juju
+    
+  dot-local-share-openstack:
+    interface: personal-files
+    write:
+      - $HOME/.local/share/openstack
 
   dot-config-openstack:
     interface: personal-files

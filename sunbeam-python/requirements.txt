@@ -21,9 +21,8 @@ pexpect
 # YAML parsing library
 pyyaml>=6.0
 
-# Set upper bound to match Juju 3.2.x series target
-# 3.2.3 has introduced a regression
-juju>=3.2,<3.2.3
+# Set upper bound to match Juju 3.3.x, 3.4.x series target
+juju>=3.3,<3.5
 
 # Used in the launch command to launch an instance
 petname
@@ -35,3 +34,15 @@ lightkube-models
 # For plugin repo
 jsonschema
 GitPython
+
+# For plugin validation
+croniter
+
+# Regression introduced in 1.3.3
+macaroonbakery!=1.3.3
+
+# For Manifest dataclasses
+pydantic
+
+# maas
+python-libmaas

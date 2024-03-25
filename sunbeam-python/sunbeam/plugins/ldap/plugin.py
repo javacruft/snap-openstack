@@ -24,18 +24,13 @@ from packaging.version import Version
 from rich.console import Console
 from rich.status import Status
 
-from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
 from sunbeam.commands.juju import JujuStepHelper
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.commands.terraform import (
-    TerraformException,
-    TerraformHelper,
-    TerraformInitStep,
-)
+from sunbeam.commands.terraform import TerraformException, TerraformInitStep
 from sunbeam.jobs.common import (
     BaseStep,
     Result,
@@ -44,11 +39,13 @@ from sunbeam.jobs.common import (
     run_plan,
     update_config,
 )
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, JujuWaitException, TimeoutException, run_sync
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
 )
+from sunbeam.versions import OPENSTACK_CHANNEL
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -62,14 +59,12 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
-        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
         domain_name: str,
     ) -> None:
         """Constructor for the generic plan.
 
-        :param tfhelper: Terraform helper pointing to terraform plan
         :param jhelper: Juju helper with loaded juju credentials
         :param plugin: Plugin that uses this plan to perform callbacks to
                        plugin.
@@ -78,12 +73,12 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
             f"Enable OpenStack {plugin.name}",
             f"Enabling OpenStack {plugin.name} application",
         )
-        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
         self.domain_name = domain_name
-        self.client = Client()
+        self.client = self.plugin.deployment.get_client()
+        self.tfhelper = self.plugin.manifest.get_tfhelper(self.plugin.tfplan)
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Apply terraform configuration to deploy openstack application"""
@@ -131,14 +126,12 @@ class DisableLDAPDomainStep(BaseStep, JujuStepHelper):
 class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
     def __init__(
         self,
-        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
         charm_config: str,
     ) -> None:
         """Constructor for the generic plan.
 
-        :param tfhelper: Terraform helper pointing to terraform plan
         :param jhelper: Juju helper with loaded juju credentials
         :param plugin: Plugin that uses this plan to perform callbacks to
                        plugin.
@@ -147,12 +140,12 @@ class UpdateLDAPDomainStep(BaseStep, JujuStepHelper):
             f"Enable OpenStack {plugin.name}",
             f"Enabling OpenStack {plugin.name} application",
         )
-        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
         self.charm_config = charm_config
-        self.client = Client()
+        self.client = self.plugin.deployment.get_client()
+        self.tfhelper = self.plugin.manifest.get_tfhelper(self.plugin.tfplan)
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Apply terraform configuration to deploy openstack application"""
@@ -199,14 +192,12 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
-        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
         charm_config: str,
     ) -> None:
         """Constructor for the generic plan.
 
-        :param tfhelper: Terraform helper pointing to terraform plan
         :param jhelper: Juju helper with loaded juju credentials
         :param plugin: Plugin that uses this plan to perform callbacks to
                        plugin.
@@ -215,12 +206,12 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
             f"Enable OpenStack {plugin.name}",
             f"Enabling OpenStack {plugin.name} application",
         )
-        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
         self.charm_config = charm_config
-        self.client = Client()
+        self.client = self.plugin.deployment.get_client()
+        self.tfhelper = self.plugin.manifest.get_tfhelper(self.plugin.tfplan)
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Apply terraform configuration to deploy openstack application"""
@@ -263,18 +254,34 @@ class AddLDAPDomainStep(BaseStep, JujuStepHelper):
 class LDAPPlugin(OpenStackControlPlanePlugin):
     version = Version("0.0.1")
 
-    def __init__(self) -> None:
+    def __init__(self, deployment: Deployment) -> None:
         super().__init__(
-            name="ldap",
+            "ldap",
+            deployment,
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
         self.config_flags = None
 
+    def manifest_defaults(self) -> dict:
+        """Manifest plugin part in dict format."""
+        return {"charms": {"keystone-ldap-k8s": {"channel": OPENSTACK_CHANNEL}}}
+
+    def manifest_attributes_tfvar_map(self) -> dict:
+        """Manifest attributes terraformvars map."""
+        return {
+            self.tfplan: {
+                "charms": {
+                    "keystone-ldap-k8s": {
+                        "channel": "ldap-channel",
+                        "revision": "ldap-revision",
+                    }
+                }
+            }
+        }
+
     def set_tfvars_on_enable(self) -> dict:
         """Set terraform variables to enable the application."""
-        return {
-            "ldap-channel": "2023.2/stable",
-        }
+        return {}
 
     def set_tfvars_on_disable(self) -> dict:
         """Set terraform variables to disable the application."""
@@ -301,9 +308,10 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
     @click.command()
     def list_domains(self) -> None:
         """List LDAP backed domains."""
-        self.client = Client()
         try:
-            tfvars = read_config(self.client, self.get_tfvar_config_key())
+            tfvars = read_config(
+                self.deployment.get_client(), self.get_tfvar_config_key()
+            )
         except ConfigItemNotFoundException:
             tfvars = {}
         click.echo(" ".join(tfvars.get("ldap-apps", {}).keys()))
@@ -335,23 +343,15 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
                 ca = f.read()
         else:
             ca = ""
-        data_location = self.snap.paths.user_data
         charm_config = {
             "ldap-config-flags": json.dumps(content),
             "domain-name": domain_name,
             "tls-ca-ldap": ca,
         }
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
-        )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(tfhelper),
-            AddLDAPDomainStep(tfhelper, jhelper, self, charm_config),
+            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+            AddLDAPDomainStep(jhelper, self, charm_config),
         ]
 
         run_plan(plan, console)
@@ -386,17 +386,10 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
             with Path(ca_cert_file).open(mode="r") as f:
                 ca = f.read()
             charm_config["tls-ca-ldap"] = ca
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
-        )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(tfhelper),
-            UpdateLDAPDomainStep(tfhelper, jhelper, self, charm_config),
+            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+            UpdateLDAPDomainStep(jhelper, self, charm_config),
         ]
 
         run_plan(plan, console)
@@ -405,17 +398,10 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
     @click.argument("domain-name")
     def remove_domain(self, domain_name: str) -> None:
         """Remove LDAP backed domain."""
-        data_location = self.snap.paths.user_data
-        tfhelper = TerraformHelper(
-            path=self.snap.paths.user_common / "etc" / f"deploy-{self.tfplan}",
-            plan=self._get_plan_name(),
-            backend="http",
-            data_location=data_location,
-        )
-        jhelper = JujuHelper(data_location)
+        jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(tfhelper),
-            DisableLDAPDomainStep(tfhelper, jhelper, self, domain_name),
+            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+            DisableLDAPDomainStep(jhelper, self, domain_name),
         ]
         run_plan(plan, console)
         click.echo(f"{domain_name} removed.")
@@ -440,7 +426,7 @@ class LDAPPlugin(OpenStackControlPlanePlugin):
             commands.update(
                 {
                     "init": [{"name": "ldap", "command": self.ldap_groups}],
-                    "ldap": [
+                    "init.ldap": [
                         {"name": "list-domains", "command": self.list_domains},
                         {"name": "add-domain", "command": self.add_domain},
                         {"name": "update-domain", "command": self.update_domain},

@@ -14,24 +14,25 @@
 # limitations under the License.
 
 import logging
+from pathlib import Path
 
 import click
 from snaphelpers import Snap
 
 from sunbeam import log
-from sunbeam.commands import bootstrap as bootstrap_cmds
 from sunbeam.commands import configure as configure_cmds
 from sunbeam.commands import dashboard_url as dasboard_url_cmds
 from sunbeam.commands import generate_cloud_config as generate_cloud_config_cmds
-from sunbeam.commands import generate_preseed as generate_preseed_cmds
 from sunbeam.commands import inspect as inspect_cmds
 from sunbeam.commands import launch as launch_cmds
-from sunbeam.commands import node as node_cmds
+from sunbeam.commands import manifest as manifest_cmds
 from sunbeam.commands import openrc as openrc_cmds
 from sunbeam.commands import prepare_node as prepare_node_cmds
-from sunbeam.commands import resize as resize_cmds
+from sunbeam.commands import proxy as proxy_cmds
 from sunbeam.commands import utils as utils_cmds
+from sunbeam.jobs import deployments as deployments_jobs
 from sunbeam.jobs.plugin import PluginManager
+from sunbeam.provider import commands as provider_cmds
 from sunbeam.utils import CatchGroup
 
 LOG = logging.getLogger()
@@ -57,15 +58,27 @@ def cli(ctx, quiet, verbose):
     """
 
 
-@click.group("cluster", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.group("manifest", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
 @click.pass_context
-def cluster(ctx):
-    """Manage the Sunbeam Cluster"""
+def manifest(ctx):
+    """Manage manifests (read-only commands)"""
+
+
+@click.group("proxy", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.pass_context
+def proxy(ctx):
+    """Manage proxy configuration"""
 
 
 @click.group("enable", context_settings=CONTEXT_SETTINGS, cls=CatchGroup)
+@click.option(
+    "-m",
+    "--manifest",
+    help="Manifest file.",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.pass_context
-def enable(ctx):
+def enable(ctx, manifest: Path | None = None):
     """Enable plugins"""
 
 
@@ -88,20 +101,29 @@ def main():
     cli.add_command(prepare_node_cmds.prepare_node_script)
     cli.add_command(configure_cmds.configure)
     cli.add_command(generate_cloud_config_cmds.cloud_config)
-    cli.add_command(generate_preseed_cmds.generate_preseed)
     cli.add_command(inspect_cmds.inspect)
     cli.add_command(launch_cmds.launch)
     cli.add_command(openrc_cmds.openrc)
     cli.add_command(dasboard_url_cmds.dashboard_url)
 
     # Cluster management
-    cli.add_command(cluster)
-    cluster.add_command(bootstrap_cmds.bootstrap)
-    cluster.add_command(node_cmds.add)
-    cluster.add_command(node_cmds.join)
-    cluster.add_command(node_cmds.list)
-    cluster.add_command(node_cmds.remove)
-    cluster.add_command(resize_cmds.resize)
+    provider_cmds.register_providers()
+    deployment = provider_cmds.load_deployment(
+        snap.paths.real_home / deployments_jobs.DEPLOYMENTS_CONFIG
+    )
+    provider_cmds.register_cli(cli, configure_cmds.configure, deployment)
+
+    # Manifest management
+    cli.add_command(manifest)
+    manifest.add_command(manifest_cmds.list)
+    manifest.add_command(manifest_cmds.show)
+    manifest.add_command(manifest_cmds.generate)
+
+    # Proxy management
+    cli.add_command(proxy)
+    proxy.add_command(proxy_cmds.show)
+    proxy.add_command(proxy_cmds.set)
+    proxy.add_command(proxy_cmds.clear)
 
     cli.add_command(enable)
     cli.add_command(disable)
@@ -110,9 +132,9 @@ def main():
     utils.add_command(utils_cmds.juju_login)
 
     # Register the plugins after all groups,commands are registered
-    PluginManager.register(cli)
+    PluginManager.register(deployment, cli)
 
-    cli()
+    cli(obj=deployment)
 
 
 if __name__ == "__main__":

@@ -15,10 +15,11 @@
 
 import logging
 
-from sunbeam.commands.terraform import TerraformHelper
-from sunbeam.jobs.juju import MODEL, JujuHelper
+from sunbeam.clusterd.client import Client
+from sunbeam.jobs.juju import JujuHelper
+from sunbeam.jobs.manifest import Manifest
 from sunbeam.jobs.steps import (
-    AddMachineUnitStep,
+    AddMachineUnitsStep,
     DeployMachineApplicationStep,
     RemoveMachineUnitStep,
 )
@@ -37,38 +38,59 @@ class DeploySunbeamMachineApplicationStep(DeployMachineApplicationStep):
 
     def __init__(
         self,
-        tfhelper: TerraformHelper,
+        client: Client,
+        manifest: Manifest,
         jhelper: JujuHelper,
+        model: str,
+        refresh: bool = False,
+        proxy_settings: dict = {},
     ):
         super().__init__(
-            tfhelper,
+            client,
+            manifest,
             jhelper,
             CONFIG_KEY,
             APPLICATION,
-            MODEL,
+            model,
+            "sunbeam-machine-plan",
             "Deploy sunbeam-machine",
             "Deploying Sunbeam Machine",
+            refresh,
         )
-
-    def extra_tfvars(self) -> dict:
-        return {"machine_model": self.model}
+        self.proxy_settings = proxy_settings
 
     def get_application_timeout(self) -> int:
         return SUNBEAM_MACHINE_APP_TIMEOUT
 
+    def extra_tfvars(self) -> dict:
+        return {
+            "charm_config": {
+                "http_proxy": self.proxy_settings.get("HTTP_PROXY", ""),
+                "https_proxy": self.proxy_settings.get("HTTPS_PROXY", ""),
+                "no_proxy": self.proxy_settings.get("NO_PROXY", ""),
+            }
+        }
 
-class AddSunbeamMachineUnitStep(AddMachineUnitStep):
-    """Add Sunbeam machine Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+class AddSunbeamMachineUnitsStep(AddMachineUnitsStep):
+    """Add Sunbeam machine Units."""
+
+    def __init__(
+        self,
+        client: Client,
+        names: list[str] | str,
+        jhelper: JujuHelper,
+        model: str,
+    ):
         super().__init__(
-            name,
+            client,
+            names,
             jhelper,
             CONFIG_KEY,
             APPLICATION,
-            MODEL,
-            "Add Sunbeam-machine unit",
-            f"Adding Sunbeam Machine unit to machine {name}",
+            model,
+            "Add Sunbeam-machine unit(s)",
+            "Adding Sunbeam Machine unit to machine(s)",
         )
 
     def get_unit_timeout(self) -> int:
@@ -78,13 +100,14 @@ class AddSunbeamMachineUnitStep(AddMachineUnitStep):
 class RemoveSunbeamMachineStep(RemoveMachineUnitStep):
     """Remove Sunbeam machine Unit."""
 
-    def __init__(self, name: str, jhelper: JujuHelper):
+    def __init__(self, client: Client, name: str, jhelper: JujuHelper, model: str):
         super().__init__(
+            client,
             name,
             jhelper,
             CONFIG_KEY,
             APPLICATION,
-            MODEL,
+            model,
             "Remove sunbeam-machine unit",
             f"Removing sunbeam-machine unit from machine {name}",
         )

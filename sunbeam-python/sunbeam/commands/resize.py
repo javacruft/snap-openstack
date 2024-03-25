@@ -13,20 +13,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
-import shutil
 
 import click
 from rich.console import Console
-from snaphelpers import Snap
 
-from sunbeam.commands.openstack import ResizeControlPlaneStep
-from sunbeam.commands.terraform import TerraformHelper, TerraformInitStep
+from sunbeam.clusterd.client import Client
+from sunbeam.commands.openstack import DeployControlPlaneStep
+from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import click_option_topology, run_plan
+from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
+from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 console = Console()
-snap = Snap()
 
 
 @click.command()
@@ -34,26 +34,28 @@ snap = Snap()
 @click.option(
     "-f", "--force", help="Force resizing to incompatible topology.", is_flag=True
 )
-def resize(topology: str, force: bool = False) -> None:
+@click.pass_context
+def resize(ctx: click.Context, topology: str, force: bool = False) -> None:
     """Expand the control plane to fit available nodes."""
-
-    tfplan = "deploy-openstack"
-    src = snap.paths.snap / "etc" / tfplan
-    dst = snap.paths.user_common / "etc" / tfplan
-    LOG.debug(f"Updating {dst} from {src}...")
-    shutil.copytree(src, dst, dirs_exist_ok=True)
-
-    data_location = snap.paths.user_data
-    tfhelper = TerraformHelper(
-        path=snap.paths.user_common / "etc" / tfplan,
-        plan="openstack-plan",
-        backend="http",
-        data_location=data_location,
+    deployment: Deployment = ctx.obj
+    client: Client = deployment.get_client()
+    manifest_obj = Manifest.load_latest_from_clusterdb(
+        deployment, include_defaults=True
     )
-    jhelper = JujuHelper(data_location)
+
+    tfplan = "openstack-plan"
+    jhelper = JujuHelper(deployment.get_connected_controller())
     plan = [
-        TerraformInitStep(tfhelper),
-        ResizeControlPlaneStep(tfhelper, jhelper, topology, force),
+        TerraformInitStep(manifest_obj.get_tfhelper(tfplan)),
+        DeployControlPlaneStep(
+            client,
+            manifest_obj,
+            jhelper,
+            topology,
+            "auto",
+            deployment.infrastructure_model,
+            force=force,
+        ),
     ]
 
     run_plan(plan, console)

@@ -26,14 +26,18 @@ from rich.console import Console
 from rich.table import Table
 from snaphelpers import Snap
 
-from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.juju import WriteCharmLogStep, WriteJujuStatusStep
-from sunbeam.commands.node import FORMAT_TABLE, FORMAT_YAML
 from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.jobs.checks import DaemonGroupCheck
-from sunbeam.jobs.common import run_plan, run_preflight_checks
-from sunbeam.jobs.juju import CONTROLLER_MODEL, JujuHelper
+from sunbeam.jobs.common import (
+    FORMAT_TABLE,
+    FORMAT_YAML,
+    run_plan,
+    run_preflight_checks,
+)
+from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.juju import JujuHelper
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -55,9 +59,8 @@ def inspect(ctx: click.Context) -> None:
 
     if ctx.invoked_subcommand is not None:
         return
-
-    data_location = snap.paths.user_data
-    jhelper = JujuHelper(data_location)
+    deployment: Deployment = ctx.obj
+    jhelper = JujuHelper(deployment.get_connected_controller())
 
     time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"sunbeam-inspection-report-{time_stamp}.tar.gz"
@@ -65,7 +68,7 @@ def inspect(ctx: click.Context) -> None:
 
     plan = []
     with tempfile.TemporaryDirectory() as tmpdirname:
-        for model in [CONTROLLER_MODEL.split("/")[-1], OPENSTACK_MODEL]:
+        for model in [deployment.infrastructure_model, OPENSTACK_MODEL]:
             status_file = Path(tmpdirname) / f"juju_status_{model}.out"
             debug_file = Path(tmpdirname) / f"debug_log_{model}.out"
             plan.extend(
@@ -98,9 +101,11 @@ def inspect(ctx: click.Context) -> None:
     default=FORMAT_TABLE,
     help="Output format.",
 )
-def plans(format: str):
+@click.pass_context
+def plans(ctx: click.Context, format: str):
     """List terraform plans and their lock status."""
-    client = Client()
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
     plans = client.cluster.list_terraform_plans()
     locks = client.cluster.list_terraform_locks()
     if format == FORMAT_TABLE:
@@ -128,9 +133,11 @@ def plans(format: str):
     help="Name of the terraform plan to unlock.",
 )
 @click.option("--force", is_flag=True, default=False, help="Force unlock the plan.")
-def unlock_plan(plan: str, force: bool):
+@click.pass_context
+def unlock_plan(ctx: click.Context, plan: str, force: bool):
     """Unlock a terraform plan."""
-    client = Client()
+    deployment: Deployment = ctx.obj
+    client = deployment.get_client()
     try:
         lock = client.cluster.get_terraform_lock(plan)
     except ConfigItemNotFoundException as e:

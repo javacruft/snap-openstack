@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import json
 import logging
 import os
 import re
@@ -21,6 +23,7 @@ from pathlib import Path
 from snaphelpers import Snap, SnapCtl
 
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.jobs.common import (
     RAM_16_GB_IN_KB,
     get_host_total_cores,
@@ -54,6 +57,72 @@ class Check:
         """
 
         return True
+
+
+class DiagnosticsResult:
+    def __init__(
+        self,
+        name: str,
+        passed: bool,
+        message: str | None = None,
+        diagnostics: str | None = None,
+        **details: dict,
+    ):
+        self.name = name
+        self.passed = passed
+        self.message = message
+        self.diagnostics = diagnostics
+        self.details = details
+
+    def to_dict(self) -> dict:
+        result = {
+            "name": self.name,
+            "passed": self.passed,
+            **self.details,
+        }
+        if self.message:
+            result["message"] = self.message
+        if self.diagnostics:
+            result["diagnostics"] = self.diagnostics
+        return result
+
+    @classmethod
+    def fail(
+        cls,
+        name: str,
+        message: str | None = None,
+        diagnostics: str | None = None,
+        **details: dict,
+    ):
+        return cls(name, False, message, diagnostics, **details)
+
+    @classmethod
+    def success(
+        cls,
+        name: str,
+        message: str | None = None,
+        diagnostics: str | None = None,
+        **details: dict,
+    ):
+        return cls(name, True, message, diagnostics, **details)
+
+
+class DiagnosticsCheck:
+    """Base class for Diagnostics checks."""
+
+    name: str
+    description: str
+
+    def __init__(self, name: str, description: str = ""):
+        self.name = name
+        self.description = description
+
+    def run(self) -> DiagnosticsResult | list[DiagnosticsResult]:
+        """Run the check logic here.
+
+        Return list of DiagnosticsResult.
+        """
+        ...
 
 
 class JujuSnapCheck(Check):
@@ -141,12 +210,12 @@ class DaemonGroupCheck(Check):
 
 # NOTE: drop with Juju can do this itself
 class LocalShareCheck(Check):
-    """Check if ~/.local/share exists for Juju use."""
+    """Check if ~/.local/share exists."""
 
     def __init__(self):
         super().__init__(
             "Check for .local/share directory",
-            "Checking for ~/.local/share directory for Juju",
+            "Checking for ~/.local/share directory",
         )
 
     def run(self) -> bool:
@@ -270,12 +339,12 @@ class SystemRequirementsCheck(Check):
 class VerifyBootstrappedCheck(Check):
     """Check deployment has been bootstrapped."""
 
-    def __init__(self):
+    def __init__(self, client: Client):
         super().__init__(
             "Check bootstrapped",
             "Checking the deployment has been bootstrapped",
         )
-        self.client = Client()
+        self.client = client
 
     def run(self) -> bool:
         bootstrapped = self.client.cluster.check_sunbeam_bootstrapped()
@@ -287,3 +356,91 @@ class VerifyBootstrappedCheck(Check):
                 "completed succesfully. Please run `sunbeam cluster bootstrap`"
             )
             return False
+
+
+class VerifyClusterdNotBootstrappedCheck(Check):
+    """Check deployment has not been bootstrapped."""
+
+    def __init__(self):
+        super().__init__(
+            "Check internal database has not been bootstrapped",
+            "Checking the internal database has not been bootstrapped",
+        )
+        self.client = Client.from_socket()
+
+    def run(self) -> bool:
+        try:
+            self.client.cluster.get_config("any")
+        except ClusterServiceUnavailableException:
+            return True
+        except Exception:
+            pass
+
+        self.message = (
+            "Local deployment has already been bootstrapped,"
+            " which is only compatible in a local type deployment."
+        )
+        return False
+
+
+class TokenCheck(Check):
+    """Check if a join token looks valid."""
+
+    def __init__(self, hostname: str, token: str):
+        super().__init__(
+            "Check for valid join token",
+            "Checking if join token looks valid",
+        )
+        self.hostname = hostname
+        self.token = token
+
+    def run(self) -> bool:
+        if not self.token:
+            self.message = "Join token cannot be an empty string"
+            return False
+
+        try:
+            token_bytes = base64.b64decode(self.token)
+        except Exception:
+            LOG.exception("Failed to decode join token")
+            self.message = "Join token is not a valid base64 string"
+            return False
+
+        try:
+            token = json.loads(token_bytes)
+        except Exception:
+            LOG.exception("Failed to decode join token")
+            self.message = "Join token content is not a valid JSON-encoded object"
+            return False
+
+        if not isinstance(token, dict):
+            self.message = "Join token content is not a valid JSON object"
+            return False
+
+        missing_keys = {"name", "secret", "join_addresses", "fingerprint"} - set(
+            token.keys()
+        )
+
+        if missing_keys:
+            self.message = "Join token does not contain the following required fields: "
+            self.message += ", ".join(sorted(missing_keys))
+
+            return False
+
+        name = token["name"]
+        if name != self.hostname:
+            self.message = (
+                f"Join token 'name' ({name}) does not match the "
+                f"hostname ({self.hostname})"
+            )
+            return False
+
+        join_addresses = token["join_addresses"]
+        if not isinstance(join_addresses, list):
+            self.message = "Join token 'join_addresses' is not a list"
+            return False
+        if len(join_addresses) == 0:
+            self.message = "Join token 'join_addresses' is empty"
+            return False
+
+        return True

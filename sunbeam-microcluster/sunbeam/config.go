@@ -9,7 +9,7 @@ import (
 
 	"github.com/canonical/microcluster/state"
 
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/database"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/database"
 )
 
 // GetConfig returns the ConfigItem based on key from the database

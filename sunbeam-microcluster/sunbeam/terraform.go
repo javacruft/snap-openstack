@@ -8,7 +8,7 @@ import (
 	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/microcluster/state"
 
-	"github.com/openstack-snaps/snap-openstack/sunbeam-microcluster/api/types"
+	"github.com/canonical/snap-openstack/sunbeam-microcluster/api/types"
 )
 
 const tfstatePrefix = "tfstate-"

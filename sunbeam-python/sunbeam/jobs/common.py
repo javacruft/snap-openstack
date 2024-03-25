@@ -18,25 +18,44 @@ import enum
 import json
 import logging
 import os
-from typing import List, Optional, Type
+from pathlib import Path
+from typing import Any, List, Optional, Type
 
 import click
+import yaml
 from click import decorators
 from juju.client.client import FullStatus
 from rich.console import Console
 from rich.status import Status
 
 from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import (
+    ClusterServiceUnavailableException,
+    ConfigItemNotFoundException,
+)
+from sunbeam.jobs.deployment import PROXY_CONFIG_KEY, Deployment
 
 LOG = logging.getLogger(__name__)
-RAM_16_GB_IN_KB = 16 * 1024 * 1024
-RAM_32_GB_IN_KB = 32 * 1024 * 1024
+RAM_16_GB_IN_KB = 16 * 1000 * 1000
+RAM_32_GB_IN_KB = 32 * 1000 * 1000
+RAM_32_GB_IN_MB = 32 * 1000
+RAM_4_GB_IN_MB = 4 * 1000
 
 # Formatting related constants
 FORMAT_TABLE = "table"
 FORMAT_YAML = "yaml"
 FORMAT_DEFAULT = "default"
 FORMAT_VALUE = "value"
+
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+SHARE_PATH = Path(".local/share/openstack/")
+
+CLICK_OK = "[green]OK[/green]"
+CLICK_FAIL = "[red]FAIL[/red]"
+
+DEFAULT_JUJU_NO_PROXY_SETTINGS = "127.0.0.1,localhost,::1"
+K8S_CLUSTER_SERVICE_CIDR = "10.152.183.0/24"
+K8S_CLUSTER_POD_CIDR = "10.1.0.0/16"
 
 
 class Role(enum.Enum):
@@ -101,7 +120,7 @@ class ResultType(enum.Enum):
 class Result:
     """The result of running a step"""
 
-    def __init__(self, result_type: ResultType, message: Optional[str] = ""):
+    def __init__(self, result_type: ResultType, message: Any = ""):
         """Creates a new result
 
         :param result_type:
@@ -269,7 +288,7 @@ def run_plan(plan: List[BaseStep], console: Console) -> dict:
     return results
 
 
-def get_step_message(plan_results: dict, step: Type[BaseStep]) -> Optional[str]:
+def get_step_message(plan_results: dict, step: Type[BaseStep]) -> Any:
     """Utility to get a step result's message."""
     result = plan_results.get(step.__name__)
     if result:
@@ -369,3 +388,63 @@ async def update_status_background(
                 await asyncio.sleep(20)
 
     return asyncio.create_task(_update_status_background_coro())
+
+
+def str_presenter(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    """Return multiline string as '|' literal block.
+
+    Ref: https://stackoverflow.com/questions/8640959/how-can-i-control-what-scalar-form-pyyaml-uses-for-my-data # noqa E501
+    """
+    if data.count("\n") > 0:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+def _get_default_no_proxy_settings() -> set:
+    """Return default no proxy settings"""
+    return {
+        "127.0.0.1",
+        "localhost",
+        K8S_CLUSTER_SERVICE_CIDR,
+        K8S_CLUSTER_POD_CIDR,
+        ".svc",
+    }
+
+
+def get_proxy_settings(deployment: Deployment) -> dict:
+    proxy = {}
+    try:
+        # If client does not exist, use detaults
+        client = deployment.get_client()
+        proxy_from_db = read_config(client, PROXY_CONFIG_KEY).get("proxy", {})
+        if proxy_from_db.get("proxy_required"):
+            proxy = {
+                p.upper(): v
+                for p in ("http_proxy", "https_proxy", "no_proxy")
+                if (v := proxy_from_db.get(p))
+            }
+    except (
+        ClusterServiceUnavailableException,
+        ConfigItemNotFoundException,
+        ValueError,
+    ) as e:
+        LOG.debug(f"Using default Proxy settings from provider due to {str(e)}")
+        proxy = deployment.get_default_proxy_settings()
+
+    if "NO_PROXY" in proxy:
+        no_proxy_list = set(proxy.get("NO_PROXY").split(","))
+        default_no_proxy_list = _get_default_no_proxy_settings()
+        proxy["NO_PROXY"] = ",".join(no_proxy_list.union(default_no_proxy_list))
+
+    return proxy
+
+
+def convert_proxy_to_model_configs(proxy_settings: dict) -> dict:
+    """Convert proxies to juju model configs."""
+    return {
+        "juju-http-proxy": proxy_settings.get("HTTP_PROXY", ""),
+        "juju-https-proxy": proxy_settings.get("HTTPS_PROXY", ""),
+        "juju-no-proxy": proxy_settings.get("NO_PROXY", DEFAULT_JUJU_NO_PROXY_SETTINGS),
+        "snap-http-proxy": proxy_settings.get("HTTP_PROXY", ""),
+        "snap-https-proxy": proxy_settings.get("HTTPS_PROXY", ""),
+    }

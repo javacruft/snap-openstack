@@ -23,12 +23,14 @@ import click
 import yaml
 from snaphelpers import Snap
 
+from sunbeam import utils
 from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ConfigItemNotFoundException,
 )
 from sunbeam.jobs.common import read_config
+from sunbeam.jobs.deployment import Deployment
 
 LOG = logging.getLogger(__name__)
 PLUGIN_YAML = "plugins.yaml"
@@ -130,7 +132,7 @@ class PluginManager:
         return plugins
 
     @classmethod
-    def get_all_external_repos(cls, detail: bool = False) -> list:
+    def get_all_external_repos(cls, client: Client, detail: bool = False) -> list:
         """Return all external repos stored in DB.
 
         Returns just names by default, the format will be
@@ -143,11 +145,11 @@ class PluginManager:
             ...
         ]
 
+        :param client: Clusterd client object.
         :param detail: If true, includes repo path and branch as well.
         :returns: List of repos.
         """
         try:
-            client = Client()
             config = read_config(client, EXTERNAL_REPO_PLUGIN_KEY)
             if detail:
                 return config.get("repos", [])
@@ -163,7 +165,7 @@ class PluginManager:
             return []
 
     @classmethod
-    def get_plugins(cls, repos: Optional[list] = []) -> dict:
+    def get_plugins(cls, deployment: Deployment, repos: Optional[list] = []) -> dict:
         """Returns list of plugin name and description.
 
         Get all plugins information for each repo specified in repos.
@@ -171,6 +173,7 @@ class PluginManager:
         including the internal plugins in snap-openstack repo. Repo name
         core is reserved for internal plugins in snap-openstack repo.
 
+        :param deployment: Deployment instance.
         :param repos: List of repos
         :returns: Dictionary of repo with plugin name and description
 
@@ -186,7 +189,7 @@ class PluginManager:
         """
         if not repos:
             repos.append("core")
-            repos.extend(cls.get_all_external_repos())
+            repos.extend(cls.get_all_external_repos(deployment.get_client()))
 
         plugins = {}
         for repo in repos:
@@ -211,7 +214,9 @@ class PluginManager:
         return plugins
 
     @classmethod
-    def enabled_plugins(cls, repos: Optional[list] = []) -> list:
+    def enabled_plugins(
+        cls, deployment: Deployment, repos: Optional[list] = []
+    ) -> list:
         """Returns plugin names that are enabled.
 
         Get all plugins from the list of repos and return plugins that have enabled
@@ -220,13 +225,14 @@ class PluginManager:
         If repos is None or empty list, get plugins from all repos defined in
         cluster db including the internal plugins.
 
+        :param deployment: Deployment instance.
         :param repos: List of repos
         :returns: List of enabled plugins
         """
         enabled_plugins = []
         if not repos:
             repos.append("core")
-            repos.extend(cls.get_all_external_repos())
+            repos.extend(cls.get_all_external_repos(deployment.get_client()))
 
         for repo in repos:
             if repo == "core":
@@ -246,7 +252,7 @@ class PluginManager:
                 continue
 
             for plugin in cls.get_plugin_classes(plugin_file):
-                p = plugin()
+                p = plugin(deployment)
                 if hasattr(plugin, "enabled") and p.enabled:
                     enabled_plugins.append(p.name)
 
@@ -254,7 +260,71 @@ class PluginManager:
         return enabled_plugins
 
     @classmethod
-    def register(cls, cli: click.Group) -> None:
+    def get_all_plugin_manifests(cls, deployment: Deployment) -> dict:
+        manifest = {}
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            m_dict = plugin.manifest_defaults()
+            utils.merge_dict(manifest, m_dict)
+
+        return manifest
+
+    @classmethod
+    def get_all_plugin_manfiest_tfvar_map(cls, deployment: Deployment) -> dict:
+        tfvar_map = {}
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            m_dict = plugin.manifest_attributes_tfvar_map()
+            utils.merge_dict(tfvar_map, m_dict)
+
+        return tfvar_map
+
+    @classmethod
+    def add_manifest_section(cls, deployment: Deployment, software_config) -> None:
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            plugin.add_manifest_section(software_config)
+
+    @classmethod
+    def get_preseed_questions_content(cls, deployment: Deployment) -> list:
+        content = []
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            content.extend(plugin.preseed_questions_content())
+
+        return content
+
+    @classmethod
+    def get_all_charms_in_openstack_plan(cls, deployment: Deployment) -> list:
+        charms = []
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            m_dict = plugin.manifest_attributes_tfvar_map()
+            charms_from_plugin = list(
+                m_dict.get("openstack-plan", {}).get("charms", {}).keys()
+            )
+            charms.extend(charms_from_plugin)
+
+        return charms
+
+    @classmethod
+    def update_proxy_model_configs(cls, deployment: Deployment) -> None:
+        plugins = cls.get_all_plugin_classes()
+        for klass in plugins:
+            plugin = klass(deployment)
+            plugin.update_proxy_model_configs()
+
+    @classmethod
+    def register(
+        cls,
+        deployment: Deployment,
+        cli: click.Group,
+    ) -> None:
         """Register the plugins.
 
         Register both the core plugins in snap-openstack repo and the plugins
@@ -262,14 +332,32 @@ class PluginManager:
         all the commands/groups defined by plugins will be shown as part of
         sunbeam cli.
 
+        :param deployment: Deployment instance.
         :param cli: Main click group for sunbeam cli.
         """
         LOG.debug("Registering core plugins")
         core_plugin_file = cls.get_core_plugins_path() / PLUGIN_YAML
         for plugin in cls.get_plugin_classes(core_plugin_file):
-            plugin().register(cli)
-
-        repos = cls.get_all_external_repos()
+            try:
+                plugin(deployment).register(cli)
+            except ValueError as e:
+                LOG.debug("Failed to register plugin: %r", str(plugin))
+                if "Clusterd address" in str(e):
+                    LOG.debug(
+                        "Clusterd address not found. Ignoring plugin registration."
+                    )
+                    continue
+                raise e
+        try:
+            client = deployment.get_client()
+        except ValueError as e:
+            if "Clusterd address" in str(e):
+                LOG.debug(
+                    "Clusterd address unset. Ignoring external plugin registration."
+                )
+                return
+            raise e
+        repos = cls.get_all_external_repos(client)
         LOG.debug(f"Registering external repo plugins {repos}")
         for repo in repos:
             plugin_file = cls.get_external_plugins_base_path() / repo / PLUGIN_YAML
@@ -282,7 +370,7 @@ class PluginManager:
                 continue
 
             for plugin in cls.get_plugin_classes(plugin_file):
-                plugin().register(cli)
+                plugin(deployment).register(cli)
 
     @classmethod
     def resolve_plugin(cls, repo: str, plugin: str) -> Optional[type]:
@@ -316,13 +404,19 @@ class PluginManager:
         )
 
     @classmethod
-    def update_plugins(cls, repos: Optional[list] = []) -> None:
+    def update_plugins(
+        cls,
+        deployment: Deployment,
+        repos: Optional[list] = [],
+        upgrade_release: bool = False,
+    ) -> None:
         """Call plugin upgrade hooks.
 
         Get all the plugins defined in repos and call the corresponding plugin
         upgrade hooks if the plugin is enabled and version is changed. Do not
         run any upgrade hooks if repos is empty list.
 
+        :param deployment: Deployment instance.
         :param repos: List of repos
         """
         if not repos:
@@ -343,15 +437,23 @@ class PluginManager:
                 continue
 
             for plugin in cls.get_plugin_classes(plugin_file):
-                p = plugin()
+                p = plugin(deployment)
                 LOG.debug(f"Object created {p.name}")
                 if hasattr(plugin, "enabled"):
                     LOG.debug(f"enabled - {p.enabled}")
                 if (
                     hasattr(plugin, "enabled")
                     and p.enabled  # noqa W503
-                    and cls.is_plugin_version_changed(p)  # noqa W503
                     and hasattr(plugin, "upgrade_hook")  # noqa W503
                 ):
                     LOG.debug(f"Upgrading plugin {p.name} defined in repo {repo}")
-                    p.upgrade_hook()
+                    try:
+                        p.upgrade_hook(upgrade_release=upgrade_release)
+                    except TypeError:
+                        LOG.debug(
+                            (
+                                f"Plugin {p.name} does not support upgrades "
+                                "between channels"
+                            )
+                        )
+                        p.upgrade_hook()

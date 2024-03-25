@@ -1,3 +1,18 @@
+# Copyright (c) 2023 Canonical Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 terraform {
   required_version = ">= 0.14.0"
   required_providers {
@@ -10,16 +25,12 @@ terraform {
 
 provider "openstack" {}
 
-resource "openstack_images_image_v2" "fedora-coreos" {
-  name             = "fedora-coreos-38"
-  image_source_url = "https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/38.20230806.3.0/x86_64/fedora-coreos-38.20230806.3.0-openstack.x86_64.qcow2.xz"
-  container_format = "bare"
-  disk_format      = "qcow2"
+resource "openstack_images_image_v2" "caas-image" {
+  name             = var.image-name
+  image_source_url = var.image-source-url
+  container_format = var.image-container-format
+  disk_format      = var.image-disk-format
   decompress       = true
   visibility       = "public"
-  properties = {
-    os_distro       = "fedora-coreos"
-    architecture    = "x86_64"
-    hypervisor_type = "qemu"
-  }
+  properties       = var.image-properties
 }

@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
+import json
 import os
 from pathlib import PosixPath
 from unittest.mock import Mock
@@ -208,6 +210,110 @@ class TestSystemRequirementsCheck:
         )
         mocker.patch("sunbeam.jobs.checks.get_host_total_cores", return_value=8)
         check = checks.SystemRequirementsCheck()
+
+        result = check.run()
+
+        assert result is True
+
+
+class TestTokenCheck:
+    def test_run_empty_token(self):
+        hostname = "myhost"
+        token = ""
+        check = checks.TokenCheck(hostname, token)
+
+        result = check.run()
+
+        assert result is False
+        assert "empty string" in check.message
+
+    def test_run_invalid_base64_token(self):
+        hostname = "myhost"
+        token = "Abb+Ckfr\\01=!!!"
+        check = checks.TokenCheck(hostname, token)
+
+        result = check.run()
+
+        assert result is False
+        assert "not a valid base64 string" in check.message
+
+    def test_run_invalid_json_token(self):
+        hostname = "myhost"
+        token = b"{invalid_json}"
+
+        check = checks.TokenCheck(hostname, base64.b64encode(token).decode())
+
+        result = check.run()
+
+        assert result is False
+        assert "not a valid JSON-encoded object" in check.message
+
+    def test_run_invalid_json_object_token(self):
+        hostname = "myhost"
+        token = b'["my_list"]'
+        check = checks.TokenCheck(hostname, base64.b64encode(token).decode())
+
+        result = check.run()
+
+        assert result is False
+        assert "not a valid JSON object" in check.message
+
+    def test_run_missing_required_fields(self):
+        hostname = "myhost"
+        token = json.dumps({"name": "myname"})
+        check = checks.TokenCheck(hostname, base64.b64encode(token.encode()).decode())
+
+        result = check.run()
+
+        assert result is False
+        assert "fingerprint, join_addresses, secret" in check.message
+
+    def test_run_mismatched_hostname(self):
+        hostname = "myhost"
+        token = json.dumps(
+            {
+                "name": "otherhost",
+                "secret": "mysecret",
+                "join_addresses": ["address"],
+                "fingerprint": "123",
+            }
+        )
+        check = checks.TokenCheck(hostname, base64.b64encode(token.encode()).decode())
+
+        result = check.run()
+
+        assert result is False
+        assert "does not match the hostname" in check.message
+
+    def test_run_empty_join_addresses(self):
+        hostname = "myhost"
+        token = json.dumps(
+            {
+                "name": "myhost",
+                "secret": "mysecret",
+                "join_addresses": [],
+                "fingerprint": "123",
+            }
+        )
+
+        check = checks.TokenCheck(hostname, base64.b64encode(token.encode()).decode())
+
+        result = check.run()
+
+        assert result is False
+        assert check.message == "Join token 'join_addresses' is empty"
+
+    def test_run_valid_token(self):
+        hostname = "myhost"
+        token = json.dumps(
+            {
+                "name": "myhost",
+                "secret": "mysecret",
+                "join_addresses": ["address"],
+                "fingerprint": "123",
+            }
+        )
+        check = checks.TokenCheck(hostname, base64.b64encode(token.encode()).decode())
 
         result = check.run()
 
