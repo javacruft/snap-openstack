@@ -216,7 +216,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
         """
         self.variables = questions.load_answers(self.client, self._CONFIG)
         self.variables.setdefault("microceph_config", {})
-        self.variables["microceph_config"].setdefault(self.name, {"osd_devices": ""})
+        self.variables["microceph_config"].setdefault(self.name, {"osd_devices": None})
 
         # Set defaults
         self.preseed.setdefault("microceph_config", {})

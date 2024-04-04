@@ -396,6 +396,7 @@ def bootstrap(
                 topology,
                 database,
                 deployment.infrastructure_model,
+                proxy_settings=proxy_settings,
             )
         )
 

@@ -122,7 +122,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         topology: str,
         database: str,
         machine_model: str,
-        proxy_settings: dict = {},
+        proxy_settings: dict | None = None,
         force: bool = False,
     ):
         super().__init__(
@@ -135,7 +135,7 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
         self.topology = topology
         self.database = database
         self.machine_model = machine_model
-        self.proxy_settings = proxy_settings
+        self.proxy_settings = proxy_settings or {}
         self.force = force
         self.model = OPENSTACK_MODEL
         self.cloud = MICROK8S_CLOUD

@@ -904,10 +904,6 @@ class MaasBootstrapJujuStep(BootstrapJujuStep):
         proxy_settings: dict | None = None,
         accept_defaults: bool = False,
     ):
-        snap = Snap()
-        controller_charm = str(
-            snap.paths.user_common / "downloads" / JUJU_CONTROLLER_CHARM
-        )
         bootstrap_args = bootstrap_args or []
         bootstrap_args.extend(
             (
@@ -915,8 +911,21 @@ class MaasBootstrapJujuStep(BootstrapJujuStep):
                 f"tags={maas_deployment.RoleTags.JUJU_CONTROLLER.value}",
                 "--bootstrap-base",
                 JUJU_BASE,
-                "--controller-charm-path",
-                controller_charm,
+            )
+        )
+        if proxy_settings:
+            snap = Snap()
+            controller_charm = str(
+                snap.paths.user_common / "downloads" / JUJU_CONTROLLER_CHARM
+            )
+            bootstrap_args.extend(
+                (
+                    "--controller-charm-path",
+                    controller_charm,
+                )
+            )
+        bootstrap_args.extend(
+            (
                 "--config",
                 f"admin-secret={password}",
             )

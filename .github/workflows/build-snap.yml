@@ -30,7 +30,7 @@ jobs:
   functional-test:
     needs: build
     name: Functional test
-    runs-on: [self-hosted, xlarge]
+    runs-on: [self-hosted, large, jammy, x64]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -47,7 +47,7 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
-          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults --manifest manifests/2023.2-candidate.yml"
+          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults --manifest manifests/2023.2-candidate.yml --topology single --database single"
           sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam cluster list"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"

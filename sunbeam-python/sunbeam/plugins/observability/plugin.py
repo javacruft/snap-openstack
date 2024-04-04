@@ -179,6 +179,8 @@ class UpdateObservabilityModelConfigStep(BaseStep, JujuStepHelper):
             LOG.exception("Error updating Observability Model config")
             return Result(ResultType.FAILED, str(e))
 
+        return Result(ResultType.COMPLETED)
+
 
 class DeployGrafanaAgentStep(BaseStep, JujuStepHelper):
     """Deploy Grafana Agent using Terraform"""
