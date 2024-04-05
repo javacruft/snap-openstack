@@ -81,7 +81,7 @@ def _preflight_checks(deployment: Deployment):
 def _update_proxy(proxy: dict, deployment: Deployment):
     from sunbeam.provider.maas.deployment import MAAS_TYPE  # to avoid circular import
 
-    _preflight_checks(depoyment)
+    _preflight_checks(deployment)
     client = deployment.get_client()
 
     # Update proxy in clusterdb
