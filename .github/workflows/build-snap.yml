@@ -47,18 +47,50 @@ jobs:
           sudo snap connect openstack:juju-bin juju:juju-bin
           sudo snap connect openstack:dot-local-share-juju
           sudo snap connect openstack:dot-config-openstack
-          sg snap_daemon "openstack.sunbeam -v cluster bootstrap --accept-defaults --manifest manifests/2023.2-candidate.yml --topology single --database single"
-          sg snap_daemon "openstack.sunbeam enable orchestration"
+          sg snap_daemon "openstack.sunbeam cluster bootstrap --accept-defaults --manifest manifests/2023.2-candidate.yml --topology single --database single"
           sg snap_daemon "openstack.sunbeam cluster list"
+          # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
+          # To download caas image, require ports to open on firewall to access fedora images.
+          sg snap_daemon "openstack.sunbeam configure -a"
+          sg snap_daemon "openstack.sunbeam launch"
+          sg snap_daemon "openstack.sunbeam enable orchestration"
           sg snap_daemon "openstack.sunbeam enable loadbalancer"
-          sg snap_daemon "openstack.sunbeam -v configure -a"
-          sg snap_daemon "openstack.sunbeam -v launch"
-      - name: Collect juju status
+          sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "openstack.sunbeam enable telemetry"
+          sg snap_daemon "openstack.sunbeam enable observability"
+          sg snap_daemon "openstack.sunbeam enable vault"
+          sg snap_daemon "openstack.sunbeam enable secrets"
+          sg snap_daemon "openstack.sunbeam enable caas"
+          sg snap_daemon "openstack.sunbeam enable validation"
+          # If smoke tests fails, logs should be collected via sunbeam command in "Collect logs"
+          # sg snap_daemon "openstack.sunbeam validation run smoke"
+          # sg snap_daemon "openstack.sunbeam validation run --output tempest_validation.log"
+          sg snap_daemon "openstack.sunbeam disable caas"
+          sg snap_daemon "openstack.sunbeam disable secrets"
+          sg snap_daemon "openstack.sunbeam disable vault"
+          # Commented disabling observability due to LP#1998282
+          # sg snap_daemon "openstack.sunbeam disable observability"
+          # sg snap_daemon "openstack.sunbeam disable telemetry"
+          sg snap_daemon "openstack.sunbeam disable dns"
+          sg snap_daemon "openstack.sunbeam disable loadbalancer"
+          sg snap_daemon "openstack.sunbeam disable orchestration"
+          sg snap_daemon "openstack.sunbeam disable validation"
+
+      - name: Collect logs
         if: always()
         run: |
-          juju status
-          juju status -m openstack
-          juju debug-log -m openstack --replay
+          mkdir -p logs
+          models=$(juju models --format json | jq -r .models[].name)
+          for model in $models; do name=$(echo $model | cut -d/ -f2); juju status -m $model -o logs/$name.yaml; done
+          for model in $models; do name=$(echo $model | cut -d/ -f2); juju debug-log -m $model --replay > logs/$name-debug-log.txt; done
+          cp -rf $HOME/snap/openstack/common/logs/*.log logs/
+          # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
+      - name: Upload logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: Sunbeam logs
+          path: logs
+          retention-days: 30
       - name: Setup tmate session
         if: ${{ failure() && runner.debug }}
         uses: canonical/action-tmate@main

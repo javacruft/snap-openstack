@@ -33,7 +33,7 @@ from sunbeam.commands.configure import (
     user_questions,
 )
 from sunbeam.commands.juju import BOOTSTRAP_CONFIG_KEY, bootstrap_questions
-from sunbeam.commands.microceph import microceph_questions
+from sunbeam.commands.microceph import CONFIG_DISKS_KEY, microceph_questions
 from sunbeam.commands.microk8s import (
     MICROK8S_ADDONS_CONFIG_KEY,
     microk8s_addons_questions,
@@ -181,8 +181,12 @@ class LocalDeployment(Deployment):
                 comment_out=True,
             )
         )
+        try:
+            variables = load_answers(client, CONFIG_DISKS_KEY)
+        except ClusterServiceUnavailableException:
+            variables = {}
         microceph_content = []
-        for name, disks in variables.get("microceph_config", {fqdn: ""}).items():
+        for name, disks in variables.get("microceph_config", {fqdn: None}).items():
             microceph_config_bank = QuestionBank(
                 questions=microceph_questions(),
                 console=console,
