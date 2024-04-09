@@ -76,5 +76,8 @@ class TestConfigureMicrocephOSDStep(unittest.TestCase):
         result = step.run()
 
         self.jhelper.run_action.assert_called_once()
+        expected_message = (
+            f"Microceph Adding disks {step.disks} failed: Action failed..."
+        )
         assert result.result_type == ResultType.FAILED
-        assert result.message == "Action failed..."
+        assert result.message == expected_message
