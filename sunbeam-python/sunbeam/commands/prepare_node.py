@@ -50,11 +50,6 @@ dpkg -s openssh-server &> /dev/null || {{
     sudo apt install -y openssh-server
 }}
 
-# Connect snap to the ssh-keys interface to allow
-# read access to private keys - this supports bootstrap
-# of the Juju controller to the local machine via SSH.
-sudo snap connect openstack:ssh-keys
-
 # Add $USER to the snap_daemon group supporting interaction
 # with the sunbeam clustering daemon for cluster operations.
 sudo addgroup $USER snap_daemon
@@ -75,6 +70,12 @@ fi
 """
 
 COMMON_TEMPLATE = f"""
+# Connect snap to the ssh-keys interface to allow
+# read access to private keys - this supports bootstrap
+# of the Juju controller to the local machine via SSH.
+# This also gives access to the ssh binary to the snap.
+sudo snap connect openstack:ssh-keys
+
 # Install the Juju snap
 sudo snap install --channel {JUJU_CHANNEL} juju
 
