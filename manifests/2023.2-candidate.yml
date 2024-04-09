@@ -11,7 +11,7 @@ software:
     cinder-k8s:
       channel: 2023.2/candidate
     designate-bind-k8s:
-      channel: 2023.2/candidate
+      channel: 9/candidate
     designate-k8s:
       channel: 2023.2/candidate
     glance-k8s:
