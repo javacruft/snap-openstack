@@ -22,7 +22,7 @@ variable "machine_ids" {
 variable "charm_channel" {
   description = "Charm channel to deploy openstack-hypervisor charm from"
   type        = string
-  default     = "latest/edge"
+  default     = "2023.2/stable"
 }
 
 variable "charm_revision" {

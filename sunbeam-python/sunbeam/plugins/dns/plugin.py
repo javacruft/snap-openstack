@@ -212,7 +212,7 @@ class DnsPlugin(OpenStackControlPlanePlugin):
                 tfvars_channel_var=None,
             ),
             "bind": ApplicationChannelData(
-                channel="9/edge",
+                channel=BIND_CHANNEL,
                 tfvars_channel_var=None,
             ),
         }

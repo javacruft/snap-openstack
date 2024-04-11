@@ -66,8 +66,8 @@ GRAFANA_AGENT_TFPLAN = "grafana-agent-plan"
 COS_CONFIG_KEY = "TerraformVarsPluginObservabilityPlanCos"
 GRAFANA_AGENT_CONFIG_KEY = "TerraformVarsPluginObservabilityPlanGrafanaAgent"
 
-COS_CHANNEL = "1.0/candidate"
-GRAFANA_AGENT_CHANNEL = "latest/edge"
+COS_CHANNEL = "1.0/stable"
+GRAFANA_AGENT_CHANNEL = "latest/stable"
 GRAFANA_AGENT_K8S_CHANNEL = "latest/stable"
 
 
