@@ -16,7 +16,7 @@
 variable "charm_microceph_channel" {
   description = "Operator channel for microceph deployment"
   type        = string
-  default     = "edge"
+  default     = "reef/candidate"
 }
 
 variable "charm_microceph_revision" {

@@ -128,7 +128,6 @@ def launch(
             )
 
             server = conn.compute.wait_for_server(server)
-            server_id = server.id
         except openstack.exceptions.SDKException as e:
             LOG.error(f"Instance creation request failed: {e}")
             raise click.ClickException(
@@ -139,7 +138,7 @@ def launch(
         try:
             external_network = conn.network.find_network("external-network")
             ip_ = conn.network.create_ip(floating_network_id=external_network.id)
-            conn.compute.add_floating_ip_to_server(server_id, ip_.floating_ip_address)
+            conn.add_ips_to_server(server, ips=[ip_.floating_ip_address])
             console.print(
                 "Access instance with",
                 f"`ssh -i {key_path} ubuntu@{ip_.floating_ip_address}`",
