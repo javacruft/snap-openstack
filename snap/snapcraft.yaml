@@ -4,7 +4,7 @@ summary: Dead simple OpenStack installation
 license: Apache-2.0
 description: |
   snap-openstack aims to provide a scalable, simple to deploy OpenStack solution.
-version: "2023.2"
+version: "2024.1"
 
 confinement: strict
 grade: stable
