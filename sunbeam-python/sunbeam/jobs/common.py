@@ -408,6 +408,7 @@ def _get_default_no_proxy_settings() -> set:
         K8S_CLUSTER_SERVICE_CIDR,
         K8S_CLUSTER_POD_CIDR,
         ".svc",
+        ".svc.cluster.local",
     }
 
 
