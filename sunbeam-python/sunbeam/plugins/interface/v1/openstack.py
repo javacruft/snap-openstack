@@ -29,7 +29,11 @@ from snaphelpers import Snap
 from sunbeam.clusterd.service import ConfigItemNotFoundException
 from sunbeam.commands.juju import JujuStepHelper
 from sunbeam.commands.openstack import OPENSTACK_MODEL, TOPOLOGY_KEY
-from sunbeam.commands.terraform import TerraformException, TerraformInitStep
+from sunbeam.commands.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformInitStep,
+)
 from sunbeam.jobs.checks import VerifyBootstrappedCheck
 from sunbeam.jobs.common import (
     BaseStep,
@@ -117,16 +121,7 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
         if self._manifest:
             return self._manifest
 
-        if self.user_manifest:
-            self._manifest = Manifest.load(
-                self.deployment,
-                manifest_file=self.user_manifest,
-                include_defaults=True,
-            )
-        else:
-            self._manifest = Manifest.load_latest_from_clusterdb(
-                self.deployment, include_defaults=True
-            )
+        self._manifest = self.deployment.get_manifest(self.user_manifest)
 
         return self._manifest
 
@@ -157,6 +152,7 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
 
     def run_enable_plans(self) -> None:
         """Run plans to enable plugin."""
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(self.deployment.get_connected_controller())
 
         plan = []
@@ -166,8 +162,8 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
             )
         plan.extend(
             [
-                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-                EnableOpenStackApplicationStep(jhelper, self),
+                TerraformInitStep(self.deployment.get_tfhelper(self.tfplan)),
+                EnableOpenStackApplicationStep(tfhelper, jhelper, self),
             ]
         )
 
@@ -181,10 +177,11 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
 
     def run_disable_plans(self) -> None:
         """Run plans to disable the plugin."""
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-            DisableOpenStackApplicationStep(jhelper, self),
+            TerraformInitStep(tfhelper),
+            DisableOpenStackApplicationStep(tfhelper, jhelper, self),
         ]
 
         run_plan(plan, console)
@@ -324,9 +321,10 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
             )
             return
 
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
         jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            UpgradeOpenStackApplicationStep(jhelper, self, upgrade_release),
+            UpgradeOpenStackApplicationStep(tfhelper, jhelper, self, upgrade_release),
         ]
 
         run_plan(plan, console)
@@ -335,6 +333,7 @@ class OpenStackControlPlanePlugin(EnableDisablePlugin):
 class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
     def __init__(
         self,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
         upgrade_release: bool = False,
@@ -349,11 +348,11 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
             f"Refresh OpenStack {plugin.name}",
             f"Refresh OpenStack {plugin.name} application",
         )
+        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
         self.upgrade_release = upgrade_release
-        self.tfhelper = self.plugin.manifest.get_tfhelper(self.plugin.tfplan)
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Run plugin upgrade."""
@@ -366,8 +365,11 @@ class UpgradeOpenStackApplicationStep(BaseStep, JujuStepHelper):
         timeout = self.plugin.set_application_timeout_on_enable()
 
         try:
-            self.plugin.manifest.update_partial_tfvars_and_apply_tf(
-                self.plugin.deployment.get_client(), charms, self.plugin.tfplan, config
+            self.tfhelper.update_partial_tfvars_and_apply_tf(
+                self.plugin.deployment.get_client(),
+                self.plugin.manifest,
+                charms,
+                config,
             )
         except TerraformException as e:
             LOG.exception(f"Error upgrading plugin {self.plugin.name}")
@@ -398,6 +400,7 @@ class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
     ) -> None:
@@ -411,6 +414,7 @@ class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):
             f"Enable OpenStack {plugin.name}",
             f"Enabling OpenStack {plugin.name} application",
         )
+        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
@@ -421,9 +425,9 @@ class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):
         extra_tfvars = self.plugin.set_tfvars_on_enable()
 
         try:
-            self.plugin.manifest.update_tfvars_and_apply_tf(
+            self.tfhelper.update_tfvars_and_apply_tf(
                 self.plugin.deployment.get_client(),
-                tfplan=self.plugin.tfplan,
+                self.plugin.manifest,
                 tfvar_config=config_key,
                 override_tfvars=extra_tfvars,
             )
@@ -437,7 +441,7 @@ class EnableOpenStackApplicationStep(BaseStep, JujuStepHelper):
                 self.jhelper.wait_until_active(
                     self.model,
                     apps,
-                    timeout=APPLICATION_DEPLOY_TIMEOUT,
+                    timeout=self.plugin.set_application_timeout_on_enable(),
                 )
             )
         except (JujuWaitException, TimeoutException) as e:
@@ -452,6 +456,7 @@ class DisableOpenStackApplicationStep(BaseStep, JujuStepHelper):
 
     def __init__(
         self,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         plugin: OpenStackControlPlanePlugin,
     ) -> None:
@@ -465,6 +470,7 @@ class DisableOpenStackApplicationStep(BaseStep, JujuStepHelper):
             f"Disable OpenStack {plugin.name}",
             f"Disabling OpenStack {plugin.name} application",
         )
+        self.tfhelper = tfhelper
         self.jhelper = jhelper
         self.plugin = plugin
         self.model = OPENSTACK_MODEL
@@ -476,15 +482,14 @@ class DisableOpenStackApplicationStep(BaseStep, JujuStepHelper):
         try:
             if self.plugin.tf_plan_location == TerraformPlanLocation.PLUGIN_REPO:
                 # Just destroy the terraform plan
-                tfhelper = self.plugin.manifest.get_tfhelper(self.plugin.tfplan)
-                tfhelper.destroy()
+                self.tfhelper.destroy()
                 delete_config(self.plugin.deployment.get_client(), config_key)
             else:
                 # Update terraform variables to disable the application
                 extra_tfvars = self.plugin.set_tfvars_on_disable()
-                self.plugin.manifest.update_tfvars_and_apply_tf(
+                self.tfhelper.update_tfvars_and_apply_tf(
                     self.plugin.deployment.get_client(),
-                    tfplan=self.plugin.tfplan,
+                    self.plugin.manifest,
                     tfvar_config=config_key,
                     override_tfvars=extra_tfvars,
                 )
@@ -493,6 +498,16 @@ class DisableOpenStackApplicationStep(BaseStep, JujuStepHelper):
 
         apps = self.plugin.set_application_names()
         LOG.debug(f"Application monitored for removal: {apps}")
-        # TODO(hemanth): Check if apps are removed or not.
+        try:
+            run_sync(
+                self.jhelper.wait_application_gone(
+                    apps,
+                    self.model,
+                    timeout=self.plugin.set_application_timeout_on_disable(),
+                )
+            )
+        except TimeoutException as e:
+            LOG.debug(f"Failed to destroy {apps}", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)

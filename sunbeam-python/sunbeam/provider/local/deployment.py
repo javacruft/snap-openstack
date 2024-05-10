@@ -33,6 +33,7 @@ from sunbeam.commands.configure import (
     user_questions,
 )
 from sunbeam.commands.juju import BOOTSTRAP_CONFIG_KEY, bootstrap_questions
+from sunbeam.commands.k8s import K8S_ADDONS_CONFIG_KEY, k8s_addons_questions
 from sunbeam.commands.microceph import CONFIG_DISKS_KEY, microceph_questions
 from sunbeam.commands.microk8s import (
     MICROK8S_ADDONS_CONFIG_KEY,
@@ -135,6 +136,9 @@ class LocalDeployment(Deployment):
             previous_answers=variables.get("bootstrap", {}),
         )
         preseed_content.extend(show_questions(bootstrap_bank, section="bootstrap"))
+
+        # NOTE: Add k8s-addons and microk8s addons. microk8s addons should be removed
+        # once microk8s is phased out
         try:
             variables = load_answers(client, MICROK8S_ADDONS_CONFIG_KEY)
         except ClusterServiceUnavailableException:
@@ -145,6 +149,17 @@ class LocalDeployment(Deployment):
             previous_answers=variables.get("addons", {}),
         )
         preseed_content.extend(show_questions(microk8s_addons_bank, section="addons"))
+
+        try:
+            variables = load_answers(client, K8S_ADDONS_CONFIG_KEY)
+        except ClusterServiceUnavailableException:
+            variables = {}
+        k8s_addons_bank = QuestionBank(
+            questions=k8s_addons_questions(),
+            console=console,
+            previous_answers=variables.get("k8s-addons", {}),
+        )
+        preseed_content.extend(show_questions(k8s_addons_bank, section="k8s-addons"))
 
         try:
             variables = load_answers(client, CLOUD_CONFIG_SECTION)
@@ -219,5 +234,5 @@ class LocalDeployment(Deployment):
             )
 
         proxy_configs = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
-        proxy = {p: v for p in proxy_configs if (v := current_env.get(p))}
+        proxy = {p: v.strip("\"'") for p in proxy_configs if (v := current_env.get(p))}
         return proxy

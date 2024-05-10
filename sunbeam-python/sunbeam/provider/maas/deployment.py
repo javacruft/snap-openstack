@@ -26,7 +26,7 @@ from sunbeam.commands.configure import (
     user_questions,
 )
 from sunbeam.commands.proxy import proxy_questions
-from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.deployment import PROXY_CONFIG_KEY, Deployment
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.jobs.questions import Question, QuestionBank, load_answers, show_questions
 

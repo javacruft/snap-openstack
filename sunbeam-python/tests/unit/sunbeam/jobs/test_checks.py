@@ -16,7 +16,6 @@
 import base64
 import json
 import os
-from pathlib import PosixPath
 from unittest.mock import Mock
 
 from sunbeam.jobs import checks
@@ -44,7 +43,7 @@ class TestSshKeysConnectedCheck:
         result = check.run()
 
         assert result is False
-        assert "sudo snap connect mysnap:ssh-keys" in check.message
+        assert f"sudo snap connect {snap.name}:ssh-keys" in check.message
 
 
 class TestDaemonGroupCheck:
@@ -80,7 +79,7 @@ class TestLocalShareCheck:
         result = check.run()
 
         assert result is True
-        os.path.exists.assert_called_with(PosixPath("/home/ubuntu/.local/share"))
+        os.path.exists.assert_called_with(snap.paths.real_home / ".local/share")
 
     def test_run_missing(self, mocker, snap):
         mocker.patch.object(checks, "Snap", return_value=snap)
@@ -92,7 +91,7 @@ class TestLocalShareCheck:
 
         assert result is False
         assert "directory not detected" in check.message
-        os.path.exists.assert_called_with(PosixPath("/home/ubuntu/.local/share"))
+        os.path.exists.assert_called_with(snap.paths.real_home / ".local/share")
 
 
 class TestVerifyFQDNCheck:

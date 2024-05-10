@@ -203,6 +203,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
         self.read_config.start()
+        self.tfhelper = Mock()
         self.jhelper = AsyncMock()
         self.manifest = Mock()
 
@@ -211,7 +212,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
 
     def test_is_skip(self):
         step = ReapplyHypervisorTerraformPlanStep(
-            self.client, self.manifest, self.jhelper, "test-model"
+            self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"
         )
         result = step.is_skip()
 
@@ -223,24 +224,24 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         )
 
         step = ReapplyHypervisorTerraformPlanStep(
-            self.client, self.manifest, self.jhelper, "test-model"
+            self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"
         )
         result = step.run()
 
-        self.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_tf_apply_failed(self):
-        self.manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+        self.tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
         step = ReapplyHypervisorTerraformPlanStep(
-            self.client, self.manifest, self.jhelper, "test-model"
+            self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"
         )
         result = step.run()
 
-        self.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
@@ -248,7 +249,7 @@ class TestReapplyHypervisorTerraformPlanStep(unittest.TestCase):
         self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
         step = ReapplyHypervisorTerraformPlanStep(
-            self.client, self.manifest, self.jhelper, "test-model"
+            self.client, self.tfhelper, self.jhelper, self.manifest, "test-model"
         )
         result = step.run()
 

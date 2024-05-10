@@ -61,15 +61,22 @@ func (c *cmdDaemon) Command() *cobra.Command {
 }
 
 func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
-	m, err := microcluster.App(context.Background(), microcluster.Args{StateDir: c.flagStateDir, SocketGroup: c.flagSocketGroup, Verbose: c.global.flagLogVerbose, Debug: c.global.flagLogDebug})
+	m, err := microcluster.App(microcluster.Args{StateDir: c.flagStateDir, SocketGroup: c.flagSocketGroup, Verbose: c.global.flagLogVerbose, Debug: c.global.flagLogDebug})
 	if err != nil {
 		return err
 	}
 
 	// Placeholder for post-action hooks that can be run by MicroCluster.
 	h := &config.Hooks{
-		// OnBootstrap is run after the daemon is initialized and bootstrapped.
-		OnBootstrap: func(_ *state.State, _ map[string]string) error {
+		// PreBootstrap is before after the daemon is initialized and bootstrapped.
+		PreBootstrap: func(_ *state.State, _ map[string]string) error {
+			logger.Info("This is a hook that runs before the daemon is initialized and bootstrapped")
+
+			return nil
+		},
+
+		// PostBootstrap is run after the daemon is initialized and bootstrapped.
+		PostBootstrap: func(_ *state.State, _ map[string]string) error {
 			logger.Info("This is a hook that runs after the daemon is initialized and bootstrapped")
 
 			return nil
@@ -125,7 +132,7 @@ func (c *cmdDaemon) Run(_ *cobra.Command, _ []string) error {
 		},
 	}
 
-	return m.Start(api.Endpoints, database.SchemaExtensions, h)
+	return m.Start(context.Background(), api.Endpoints, database.SchemaExtensions, h)
 }
 
 func init() {

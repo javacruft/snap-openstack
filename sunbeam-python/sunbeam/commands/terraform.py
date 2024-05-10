@@ -25,7 +25,10 @@ from typing import Optional
 from rich.status import Status
 from snaphelpers import Snap
 
-from sunbeam.jobs.common import BaseStep, Result, ResultType
+from sunbeam.clusterd.client import Client
+from sunbeam.clusterd.service import ConfigItemNotFoundException
+from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, update_config
+from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 
@@ -71,6 +74,7 @@ class TerraformHelper:
         self,
         path: Path,
         plan: str,
+        tfvar_map: dict,
         env: Optional[dict] = None,
         parallelism: Optional[int] = None,
         backend: Optional[str] = None,
@@ -79,6 +83,7 @@ class TerraformHelper:
         self.snap = Snap()
         self.path = path
         self.plan = plan
+        self.tfvar_map = tfvar_map
         self.env = env
         self.parallelism = parallelism
         self.backend = backend or "local"
@@ -296,6 +301,135 @@ class TerraformHelper:
             LOG.error(f"terraform sync failed: {e.output}")
             LOG.error(e.stderr)
             raise TerraformException(str(e))
+
+    def update_partial_tfvars_and_apply_tf(
+        self,
+        client: Client,
+        manifest: Manifest,
+        charms: list[str],
+        tfvar_config: Optional[str] = None,
+        tf_apply_extra_args: list | None = None,
+    ) -> None:
+        """Updates tfvars for specific charms and apply the plan."""
+        current_tfvars = {}
+        updated_tfvars = {}
+        if tfvar_config:
+            try:
+                current_tfvars = read_config(client, tfvar_config)
+                # Exclude all default tfvar keys from the previous terraform
+                # vars applied to the plan.
+                _tfvar_names = self._get_tfvar_names(charms)
+                updated_tfvars = {
+                    k: v for k, v in current_tfvars.items() if k not in _tfvar_names
+                }
+            except ConfigItemNotFoundException:
+                pass
+
+        updated_tfvars.update(self._get_tfvars(manifest, charms))
+        if tfvar_config:
+            update_config(client, tfvar_config, updated_tfvars)
+
+        self.write_tfvars(updated_tfvars)
+        LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
+        self.apply(tf_apply_extra_args)
+
+    def update_tfvars_and_apply_tf(
+        self,
+        client: Client,
+        manifest: Manifest,
+        tfvar_config: Optional[str] = None,
+        override_tfvars: dict | None = None,
+        tf_apply_extra_args: list | None = None,
+    ) -> None:
+        """Updates terraform vars and Apply the terraform.
+
+        Get tfvars from cluster db using tfvar_config key, Manifest file using
+        Charm Manifest tfvar map from core and plugins, User provided override_tfvars.
+        Merge the tfvars in the above order so that terraform vars in override_tfvars
+        will have highest priority.
+        Get tfhelper object for tfplan and write tfvars and apply the terraform plan.
+
+        :param tfvar_config: TerraformVar key name used to save tfvar in clusterdb
+        :type tfvar_config: str or None
+        :param override_tfvars: Terraform vars to override
+        :type override_tfvars: dict
+        :param tf_apply_extra_args: Extra args to terraform apply command
+        :type tf_apply_extra_args: list or None
+        """
+        current_tfvars = None
+        updated_tfvars = {}
+        if tfvar_config:
+            try:
+                current_tfvars = read_config(client, tfvar_config)
+                # Exclude all default tfvar keys from the previous terraform
+                # vars applied to the plan.
+                _tfvar_names = self._get_tfvar_names()
+                updated_tfvars = {
+                    k: v for k, v in current_tfvars.items() if k not in _tfvar_names
+                }
+            except ConfigItemNotFoundException:
+                pass
+
+        # NOTE: It is expected for Manifest to contain all previous changes
+        # So override tfvars from configdb to defaults if not specified in
+        # manifest file
+        updated_tfvars.update(self._get_tfvars(manifest))
+        if override_tfvars:
+            updated_tfvars.update(override_tfvars)
+        if tfvar_config:
+            update_config(client, tfvar_config, updated_tfvars)
+
+        self.write_tfvars(updated_tfvars)
+        LOG.debug(f"Applying plan {self.plan} with tfvars {updated_tfvars}")
+        self.apply(tf_apply_extra_args)
+
+    def _get_tfvars(self, manifest: Manifest, charms: Optional[list] = None) -> dict:
+        """Get tfvars from the manifest.
+
+        MANIFEST_ATTRIBUTES_TFVAR_MAP holds the mapping of Manifest attributes
+        and the terraform variable name. For each terraform variable in
+        MANIFEST_ATTRIBUTES_TFVAR_MAP, get the corresponding value from Manifest
+        and return all terraform variables as dict.
+
+        If charms is passed as input, filter the charms based on the list
+        provided.
+        """
+        tfvars = {}
+
+        charms_tfvar_map = self.tfvar_map.get("charms", {})
+        if charms:
+            charms_tfvar_map = {
+                k: v for k, v in charms_tfvar_map.items() if k in charms
+            }
+
+        # handle tfvars for charms section
+        for charm, per_charm_tfvar_map in charms_tfvar_map.items():
+            charm_manifest = manifest.software.charms.get(charm)
+            if charm_manifest:
+                manifest_charm = charm_manifest.model_dump()
+                for charm_attribute_name, tfvar_name in per_charm_tfvar_map.items():
+                    charm_attribute_value = manifest_charm.get(charm_attribute_name)
+                    if charm_attribute_value:
+                        tfvars[tfvar_name] = charm_attribute_value
+
+        return tfvars
+
+    def _get_tfvar_names(self, charms: Optional[list] = None) -> list:
+        if charms:
+            return [
+                tfvar_name
+                for charm, per_charm_tfvar_map in self.tfvar_map.get(
+                    "charms", {}
+                ).items()
+                for _, tfvar_name in per_charm_tfvar_map.items()
+                if charm in charms
+            ]
+        else:
+            return [
+                tfvar_name
+                for _, per_charm_tfvar_map in self.tfvar_map.get("charms", {}).items()
+                for _, tfvar_name in per_charm_tfvar_map.items()
+            ]
 
 
 class TerraformInitStep(BaseStep):

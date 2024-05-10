@@ -13,18 +13,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import Mock, patch
+import functools
+from unittest.mock import patch
 
 import pytest
 
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
-from sunbeam.jobs.common import Role, get_proxy_settings
+from sunbeam.jobs.common import Role
+from sunbeam.jobs.deployment import Deployment
 
 
 @pytest.fixture()
 def read_config():
-    with patch("sunbeam.jobs.common.read_config") as p:
+    with patch("sunbeam.jobs.deployment.read_config") as p:
         yield p
+
+
+@pytest.fixture()
+def deployment():
+    with patch("sunbeam.jobs.deployment.Deployment") as p:
+        dep = p(name="", url="", type="")
+        dep.get_proxy_settings.side_effect = functools.partial(
+            Deployment.get_proxy_settings, dep
+        )
+        yield dep
 
 
 class TestRoles:
@@ -96,37 +108,38 @@ class TestProxy:
             ),
         ],
     )
-    def test_get_proxy_settings(self, read_config, test_input, expected_proxy):
+    def test_get_proxy_settings(
+        self, read_config, deployment, test_input, expected_proxy
+    ):
         read_config.return_value = test_input
-        mock_deployment = Mock()
-        proxy = get_proxy_settings(mock_deployment)
+        proxy = deployment.get_proxy_settings()
         assert expected_proxy.get("HTTP_PROXY") == proxy.get("HTTP_PROXY")
         assert expected_proxy.get("HTTPS_PROXY") == proxy.get("HTTPS_PROXY")
         expected_no_proxy_list = ",".split(expected_proxy.get("NO_PROXY"))
         no_proxy_list = ",".split(proxy.get("NO_PROXY"))
         assert expected_no_proxy_list == no_proxy_list
 
-    def test_get_proxy_settings_no_connection_to_clusterdb(self, read_config):
-        read_config.side_effect = ClusterServiceUnavailableException(
-            "Cluster unavailable.."
-        )
-        mock_deployment = Mock()
-        mock_deployment.get_default_proxy_settings.return_value = {}
-        proxy = get_proxy_settings(mock_deployment)
-        assert proxy == {}
-
-    def test_get_proxy_settings_no_connection_to_clusterdb_and_with_default_proxy(
-        self, read_config
+    def test_get_proxy_settings_no_connection_to_clusterdb(
+        self, read_config, deployment
     ):
         read_config.side_effect = ClusterServiceUnavailableException(
             "Cluster unavailable.."
         )
-        mock_deployment = Mock()
-        mock_deployment.get_default_proxy_settings.return_value = {
+        deployment.get_default_proxy_settings.return_value = {}
+        proxy = deployment.get_proxy_settings()
+        assert proxy == {}
+
+    def test_get_proxy_settings_no_connection_to_clusterdb_and_with_default_proxy(
+        self, read_config, deployment
+    ):
+        read_config.side_effect = ClusterServiceUnavailableException(
+            "Cluster unavailable.."
+        )
+        deployment.get_default_proxy_settings.return_value = {
             "HTTP_PROXY": "http://squid.internal:3128",
             "NO_PROXY": ".example.com",
         }
-        proxy = get_proxy_settings(mock_deployment)
+        proxy = deployment.get_proxy_settings()
         expected_proxy = {
             "HTTP_PROXY": "http://squid.internal:3128",
             "NO_PROXY": (
@@ -136,7 +149,3 @@ class TestProxy:
         expected_no_proxy_list = ",".split(expected_proxy.get("NO_PROXY"))
         no_proxy_list = ",".split(proxy.get("NO_PROXY"))
         assert expected_no_proxy_list == no_proxy_list
-
-
-if __name__ == "__main__":
-    unittest.main()

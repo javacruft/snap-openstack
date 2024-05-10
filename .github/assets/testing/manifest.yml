@@ -1,0 +1,64 @@
+software:
+  charms:
+    aodh-k8s:
+      channel: OS_CHARM
+    barbican-k8s:
+      channel: OS_CHARM
+    ceilometer-k8s:
+      channel: OS_CHARM
+    cinder-ceph-k8s:
+      channel: OS_CHARM
+    cinder-k8s:
+      channel: OS_CHARM
+    designate-bind-k8s:
+    # Is that interesting to switch ?
+      channel: 9/edge
+    designate-k8s:
+      channel: OS_CHARM
+    glance-k8s:
+      channel: OS_CHARM
+    gnocchi-k8s:
+      channel: OS_CHARM
+    heat-k8s:
+      channel: OS_CHARM
+    horizon-k8s:
+      channel: OS_CHARM
+    keystone-k8s:
+      channel: OS_CHARM
+    keystone-ldap-k8s:
+      channel: OS_CHARM
+    magnum-k8s:
+      channel: OS_CHARM
+    neutron-k8s:
+      channel: OS_CHARM
+    nova-k8s:
+      channel: OS_CHARM
+    octavia-k8s:
+      channel: OS_CHARM
+    openstack-exporter-k8s:
+      channel: OS_CHARM
+    openstack-hypervisor:
+      channel: OS_CHARM
+    # removed as not present in 2023.2
+    # openstack-images-sync-k8s:
+    #   channel: OS_CHARM
+    ovn-central-k8s:
+      channel: OVN_CHARM
+    ovn-relay-k8s:
+      channel: OVN_CHARM
+    placement-k8s:
+      channel: OS_CHARM
+    sunbeam-clusterd:
+      channel: OS_CHARM
+    sunbeam-machine:
+      channel: OS_CHARM
+    tempest-k8s:
+      channel: OS_CHARM
+    microceph:
+      channel: MICROCEPH_CHARM
+    rabbitmq-k8s:
+      channel: RABBITMQ_CHARM
+    mysql-k8s:
+      channel: MYSQL_CHARM
+    mysql-router-k8s:
+      channel: MYSQL_ROUTER_CHARM

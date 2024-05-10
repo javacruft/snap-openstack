@@ -20,6 +20,7 @@ import pytest
 
 import sunbeam.commands.configure as configure
 import sunbeam.jobs.questions
+import sunbeam.utils
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
 
@@ -82,7 +83,7 @@ def get_nic_macs():
 class SetHypervisorCharmConfigStep:
     def test_is_skip(self, cclient, jhelper):
         step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, "/tmp/dummypath", "test-model"
+            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
         )
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
@@ -93,7 +94,7 @@ class SetHypervisorCharmConfigStep:
             "external_network": {"physical_network": "physnet1"},
         }
         step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, "/tmp/dummypath", "test-model"
+            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
         )
         step.run()
         jhelper.set_application_config.assert_called_once_with(
@@ -117,7 +118,7 @@ class SetHypervisorCharmConfigStep:
             },
         }
         step = configure.SetHypervisorCharmConfigStep(
-            cclient, jhelper, "/tmp/dummypath", "test-model"
+            cclient, jhelper, Path("/tmp/dummypath"), "test-model"
         )
         step.run()
         jhelper.set_application_config.assert_called_once_with(
@@ -269,29 +270,29 @@ export OS_IDENTITY_API_VERSION={auth_version}"""
 class TestDemoSetup:
     def test_is_skip_demo_setup(self, cclient, tfhelper, load_answers):
         load_answers.return_value = {"user": {"run_demo_setup": True}}
-        step = configure.DemoSetup(cclient, tfhelper, "/tmp/dummy")
+        step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
         result = step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_is_skip(self, cclient, tfhelper, load_answers):
         load_answers.return_value = {"user": {"run_demo_setup": False}}
-        step = configure.DemoSetup(cclient, tfhelper, "/tmp/dummy")
+        step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
         result = step.is_skip()
         assert result.result_type == ResultType.SKIPPED
 
     def test_run(self, cclient, tfhelper, load_answers):
         answer_data = {"user": {"foo": "bar"}}
         load_answers.return_value = answer_data
-        step = configure.DemoSetup(cclient, tfhelper, "/tmp/dummy")
+        step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
         result = step.run()
-        tfhelper.write_tfvars.assert_called_once_with(answer_data, "/tmp/dummy")
+        tfhelper.write_tfvars.assert_called_once_with(answer_data, Path("/tmp/dummy"))
         assert result.result_type == ResultType.COMPLETED
 
     def test_run_fail(self, cclient, tfhelper, load_answers):
         answer_data = {"user": {"foo": "bar"}}
         load_answers.return_value = answer_data
         tfhelper.apply.side_effect = TerraformException("Bad terraform")
-        step = configure.DemoSetup(cclient, tfhelper, "/tmp/dummy")
+        step = configure.DemoSetup(cclient, tfhelper, Path("/tmp/dummy"))
         result = step.run()
         assert result.result_type == ResultType.FAILED
 

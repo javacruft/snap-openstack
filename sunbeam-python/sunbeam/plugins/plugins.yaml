@@ -79,3 +79,9 @@ sunbeam-plugins:
       path: sunbeam.plugins.validation.plugin.ValidationPlugin
       supported_architectures:
         - amd64
+    - name: "images-sync"
+      version: "0.0.1"
+      description: "Plugin for syncing images from a simplestreams source"
+      path: sunbeam.plugins.images_sync.plugin.ImagesSyncPlugin
+      supported_architectures:
+        - amd64

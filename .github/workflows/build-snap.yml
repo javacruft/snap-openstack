@@ -55,8 +55,8 @@ jobs:
           sg snap_daemon "openstack.sunbeam configure -a"
           sg snap_daemon "openstack.sunbeam launch"
           sg snap_daemon "openstack.sunbeam enable orchestration"
-          # sg snap_daemon "openstack.sunbeam enable loadbalancer"
-          # sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "openstack.sunbeam enable loadbalancer"
+          sg snap_daemon "openstack.sunbeam enable dns --nameservers=testing.github."
           sg snap_daemon "openstack.sunbeam enable telemetry"
           sg snap_daemon "openstack.sunbeam enable observability"
           sg snap_daemon "openstack.sunbeam enable vault"
@@ -72,8 +72,8 @@ jobs:
           # Commented disabling observability due to LP#1998282
           # sg snap_daemon "openstack.sunbeam disable observability"
           # sg snap_daemon "openstack.sunbeam disable telemetry"
-          # sg snap_daemon "openstack.sunbeam disable dns"
-          # sg snap_daemon "openstack.sunbeam disable loadbalancer"
+          sg snap_daemon "openstack.sunbeam disable dns"
+          sg snap_daemon "openstack.sunbeam disable loadbalancer"
           sg snap_daemon "openstack.sunbeam disable orchestration"
           # sg snap_daemon "openstack.sunbeam disable validation"
 
@@ -81,16 +81,25 @@ jobs:
         if: always()
         run: |
           mkdir -p logs
-          models=$(juju models --format json | jq -r .models[].name)
-          for model in $models; do name=$(echo $model | cut -d/ -f2); juju status -m $model -o logs/$name.yaml; cat logs/$name.yaml; done
-          for model in $models; do name=$(echo $model | cut -d/ -f2); juju debug-log -m $model --replay > logs/$name-debug-log.txt; done
           cp -rf $HOME/snap/openstack/common/logs/*.log logs/
+          models=$(juju models --format json | jq -r .models[].name)
+          for model in $models;
+          do 
+            name=$(echo $model | cut -d/ -f2);
+            juju status -m $model -o logs/$name.yaml;
+            cat logs/$name.yaml;
+            juju debug-log -m $model --replay &> logs/$name-debug-log.txt || echo "Not able to get logs for model $model"
+            for pod in $(sudo microk8s.kubectl get pods -n $name -o=jsonpath='{.items[*].metadata.name}');
+            do
+              sudo microk8s.kubectl logs --ignore-errors -n $name --all-containers $pod &> logs/$pod.log || echo "Not able to get log for $pod"
+            done
+          done
           # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v3
         with:
-          name: Sunbeam logs
+          name: sunbeam_logs
           path: logs
           retention-days: 30
       - name: Setup tmate session

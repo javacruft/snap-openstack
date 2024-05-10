@@ -18,5 +18,8 @@ pytest
 pytest-mock
 pytest-asyncio
 
+# Type stubs for requests
+types-requests
+
 # For validation plugin
 croniter

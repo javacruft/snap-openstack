@@ -23,10 +23,12 @@ from sunbeam.jobs.juju import (
     JujuException,
     JujuHelper,
     ModelNotFoundException,
+    TimeoutException,
     run_sync,
 )
 
 MAX_CONNECTIONS = 500
+SET_MAX_CONNECTIONS_TIMEOUT = 300
 
 LOG = logging.getLogger(__name__)
 
@@ -113,11 +115,19 @@ class ConfigureMySQLStep(BaseStep):
                 ]
             )
             try:
-                run_sync(
+                res = run_sync(
                     self.jhelper.run_cmd_on_unit_payload(
-                        leader, OPENSTACK_MODEL, cmd, "mysql"
+                        leader,
+                        OPENSTACK_MODEL,
+                        cmd,
+                        "mysql",
+                        SET_MAX_CONNECTIONS_TIMEOUT,
                     )
                 )
+                LOG.debug("Set max_connections on %s: %s", mysql, res)
+            except TimeoutException as e:
+                LOG.debug(f"Timeout setting max_connections on {mysql}", exc_info=True)
+                return Result(ResultType.FAILED, str(e))
             except JujuException as e:
                 LOG.debug(f"Failed to set max_connections on {mysql}", exc_info=True)
                 return Result(ResultType.FAILED, str(e))

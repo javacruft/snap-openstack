@@ -66,6 +66,10 @@ class DeploymentsConfig(pydantic.BaseModel):
         Not to lose the original file.
         """
         self_dict = self.dict()
+        # self_dict has deployments with Deployment dict but not of provider
+        # so workaround to add each deployment based on provider
+        deployments = [d.dict() for d in self.deployments]
+        self_dict["deployments"] = deployments
         LOG.debug(f"Writing deployment configuration to {str(self.path)!r}")
         with tempfile.NamedTemporaryFile("w") as tmp:
             yaml.safe_dump(self_dict, tmp)

@@ -23,7 +23,7 @@ from sunbeam.clusterd.service import (
     ConfigItemNotFoundException,
     NodeNotExistInClusterException,
 )
-from sunbeam.commands.terraform import TerraformException
+from sunbeam.commands.terraform import TerraformException, TerraformHelper
 from sunbeam.jobs.common import BaseStep, Result, ResultType, read_config, update_config
 from sunbeam.jobs.juju import (
     ApplicationNotFoundException,
@@ -42,24 +42,24 @@ class DeployMachineApplicationStep(BaseStep):
     def __init__(
         self,
         client: Client,
-        manifest: Manifest,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
+        manifest: Manifest,
         config: str,
         application: str,
         model: str,
-        tfplan: str,
         banner: str = "",
         description: str = "",
         refresh: bool = False,
     ):
         super().__init__(banner, description)
-        self.manifest = manifest
+        self.client = client
+        self.tfhelper = tfhelper
         self.jhelper = jhelper
+        self.manifest = manifest
         self.config = config
         self.application = application
         self.model = model
-        self.client = client
-        self.tfplan = tfplan
         # Set refresh flag to True to redeploy the application
         self.refresh = refresh
 
@@ -102,9 +102,9 @@ class DeployMachineApplicationStep(BaseStep):
                     "machine_model": self.model,
                 }
             )
-            self.manifest.update_tfvars_and_apply_tf(
+            self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
-                tfplan=self.tfplan,
+                self.manifest,
                 tfvar_config=self.config,
                 override_tfvars=extra_tfvars,
             )

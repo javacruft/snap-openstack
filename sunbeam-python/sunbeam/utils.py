@@ -20,17 +20,15 @@ import logging
 import re
 import socket
 import sys
-from dataclasses import InitVar, dataclass, is_dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import click
 import netifaces
 import pwgen
-from pydantic.fields import ModelPrivateAttr
 from pyroute2 import IPDB, NDB
 
-from sunbeam.plugins.interface.v1.base import PluginError
+from sunbeam.jobs.common import SunbeamException
 
 LOG = logging.getLogger(__name__)
 LOCAL_ACCESS = "local"
@@ -277,7 +275,7 @@ class CatchGroup(click.Group):
     def __call__(self, *args, **kwargs):
         try:
             return self.main(*args, **kwargs)
-        except PluginError as e:
+        except SunbeamException as e:
             LOG.debug(e, exc_info=True)
             LOG.error("Error: %s", e)
             sys.exit(1)
@@ -304,45 +302,3 @@ def merge_dict(d: dict, u: dict) -> dict:
                 d[k] = v
 
     return d
-
-
-def asdict_with_extra_fields(dc: dataclass) -> dict:
-    """Returns dataclass in dict format.
-
-    dataclasses.asdict only returns the fields defined in
-    the dataclass. If any new fields are added dynamically
-    they are not added as part of returned dictionary.
-    In sunbeam, Manifest dataclass can get additional fields
-    dynamically by the plugins.
-    This function returns all the fields as dict including
-    extra fields. However InitVar and Private fields are
-    dropped from the dict.
-    """
-
-    def handle_dict(obj: dict, ignored_fields: list = ["__pydantic_initialised__"]):
-        output = {}
-        for name, value in obj.items():
-            if name in ignored_fields:
-                continue
-
-            if is_dataclass(value):
-                value = asdict_with_extra_fields(value)
-            elif isinstance(value, dict):
-                value = handle_dict(value)
-            elif isinstance(value, Path):
-                value = str(value)
-
-            output[name] = value
-
-        return output
-
-    obj = dc.__dict__
-
-    # Ignore InitVars and Private Attributes while generating manifest.
-    for field, value in dc.__dataclass_fields__.items():
-        if isinstance(value.type, InitVar) or isinstance(
-            value.default, ModelPrivateAttr
-        ):
-            obj.pop(field, None)
-
-    return handle_dict(obj)

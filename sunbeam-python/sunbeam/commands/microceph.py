@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.status import Status
 
 from sunbeam.clusterd.client import Client
+from sunbeam.commands.terraform import TerraformHelper
 from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import (
@@ -77,19 +78,20 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
     def __init__(
         self,
         client: Client,
-        manifest: Manifest,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
+        manifest: Manifest,
         model: str,
         refresh: bool = False,
     ):
         super().__init__(
             client,
-            manifest,
+            tfhelper,
             jhelper,
+            manifest,
             CONFIG_KEY,
             APPLICATION,
             model,
-            "microceph-plan",
             "Deploy MicroCeph",
             "Deploying MicroCeph",
             refresh,
@@ -162,7 +164,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
         self.name = name
         self.jhelper = jhelper
         self.model = model
-        self.preseed = deployment_preseed
+        self.preseed = deployment_preseed or {}
         self.accept_defaults = accept_defaults
         self.variables = {}
         self.machine_id = ""
@@ -221,7 +223,9 @@ class ConfigureMicrocephOSDStep(BaseStep):
 
         # Preseed can have osd_devices as list. If so, change to comma separated str
         osd_devices = (
-            self.preseed.get("microceph_config").get(self.name).get("osd_devices")
+            self.preseed.get("microceph_config", {})
+            .get(self.name, {})
+            .get("osd_devices")
         )
         if isinstance(osd_devices, list):
             osd_devices_str = ",".join(osd_devices)
@@ -230,8 +234,8 @@ class ConfigureMicrocephOSDStep(BaseStep):
         microceph_config_bank = questions.QuestionBank(
             questions=self.microceph_config_questions(),
             console=console,  # type: ignore
-            preseed=self.preseed.get("microceph_config").get(self.name),
-            previous_answers=self.variables.get("microceph_config").get(self.name),
+            preseed=self.preseed.get("microceph_config", {}).get(self.name),
+            previous_answers=self.variables.get("microceph_config", {}).get(self.name),
             accept_defaults=self.accept_defaults,
         )
         # Microceph configuration

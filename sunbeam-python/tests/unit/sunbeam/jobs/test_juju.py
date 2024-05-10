@@ -30,13 +30,13 @@ clusters:
 - cluster:
     certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVSDh2MmtKZDE0TEs4VWIrM1RmUGVUY21pMWNrd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01NVEF1TVRVeUxqRTRNeTR4TUI0WERUSXpNRFF3TkRBMU1Ua3lOVm9YRFRNegpNRFF3TVRBMU1Ua3lOVm93RnpFVk1CTUdBMVVFQXd3TU1UQXVNVFV5TGpFNE15NHhNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUF4RWkwVFhldmJYNFNvZ2VsRW16T0NQU2tYNHloOURCVGd6WFEKQkdJQTF4TDFwZ09mRkNMNzZYSlROSU4rYUNPT1BoVGp6dXoyR3dpR05pMHVBdnZyUGVrN0p0cEliUjg4YjRSQQpZUTRtMTllMU5zVjdwZ2pHL0JEQzVza1dycVpoZTR5ZTZoOXI2OXpKb1l5NEE4eFZLb1MvdElBZkdSejZvaS9uCndpY0ZzKzQyc29icm92MFdyUm5KbFV4eisyVHB2TFA1TW40eUExZHpGV0RLMTVCemVHa1YyYTVDeHBqcFBBTE4KVzUwVWlvSittbHBmTmwvYzZKWmFaZDR4S1NxclppU2dCY3BOQlhvWjJYVHpDOVNJTFF5RGZpZUpVNWxOcEIwSgpvSUphT0UvOTNseGp1bUdsSlRLSS9ucmpYM241UDFyaFFlWTNxV2p5S21ZNlFucjRqUUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVU0yVTBMSTZtcGFaOTVkTnlIRGs1ZlZCck5ISXdId1lEVlIwakJCZ3dGb0FVTTJVMExJNm0KcGFaOTVkTnlIRGs1ZlZCck5ISXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBZzZITWk4eTQrSENrOCtlb1FuamlmOHd4MytHVDZFNk02SWdRWWRvSFJjYXNYZ0JWLzd6OVRHQnpNeG1aCmdrL0Fnc08yQitLUFh3NmdQZU1GL1JLMjhGNlovK0FjYWMzdUtjT1N1WUJiL2lRKzI1cU9BazZaTStoSTVxMWQKUm1uVzBIQmpzNmg1bVlDODJrSVcrWStEYWN5bUx3OTF3S2ptTXlvMnh4OTBRb0IvWnBSVUxiNjVvWmlkcHZEawpOMStleFg4QmhIeE85S0lhMFFvcThVWFdLTjN4anZRb1pVanFieXY1VWFvcjBwbWpKT1NLKzJLMllRSk9FbUxaCkFDdEtzUDNpaU1UTlRXYUpxVjdWUVZaL3dRUVdsQ1h3VFp3WGlicXk0Z0kwb3JrcVNha0gzVFZMblVrRlFKU24KUi8waU1RRVFzQW5kajZBcVhlQml3ZG5aSGc9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==  # noqa: E501
     server: https://10.5.1.180:16443
-  name: microk8s-cluster
+  name: k8s-cluster
 contexts:
 - context:
-    cluster: microk8s-cluster
+    cluster: k8s-cluster
     user: admin
-  name: microk8s
-current-context: microk8s
+  name: k8s
+current-context: k8s
 kind: Config
 preferences: {}
 users:
@@ -51,13 +51,13 @@ clusters:
 - cluster:
     certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVSDh2MmtKZDE0TEs4VWIrM1RmUGVUY21pMWNrd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01NVEF1TVRVeUxqRTRNeTR4TUI0WERUSXpNRFF3TkRBMU1Ua3lOVm9YRFRNegpNRFF3TVRBMU1Ua3lOVm93RnpFVk1CTUdBMVVFQXd3TU1UQXVNVFV5TGpFNE15NHhNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUF4RWkwVFhldmJYNFNvZ2VsRW16T0NQU2tYNHloOURCVGd6WFEKQkdJQTF4TDFwZ09mRkNMNzZYSlROSU4rYUNPT1BoVGp6dXoyR3dpR05pMHVBdnZyUGVrN0p0cEliUjg4YjRSQQpZUTRtMTllMU5zVjdwZ2pHL0JEQzVza1dycVpoZTR5ZTZoOXI2OXpKb1l5NEE4eFZLb1MvdElBZkdSejZvaS9uCndpY0ZzKzQyc29icm92MFdyUm5KbFV4eisyVHB2TFA1TW40eUExZHpGV0RLMTVCemVHa1YyYTVDeHBqcFBBTE4KVzUwVWlvSittbHBmTmwvYzZKWmFaZDR4S1NxclppU2dCY3BOQlhvWjJYVHpDOVNJTFF5RGZpZUpVNWxOcEIwSgpvSUphT0UvOTNseGp1bUdsSlRLSS9ucmpYM241UDFyaFFlWTNxV2p5S21ZNlFucjRqUUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVU0yVTBMSTZtcGFaOTVkTnlIRGs1ZlZCck5ISXdId1lEVlIwakJCZ3dGb0FVTTJVMExJNm0KcGFaOTVkTnlIRGs1ZlZCck5ISXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBZzZITWk4eTQrSENrOCtlb1FuamlmOHd4MytHVDZFNk02SWdRWWRvSFJjYXNYZ0JWLzd6OVRHQnpNeG1aCmdrL0Fnc08yQitLUFh3NmdQZU1GL1JLMjhGNlovK0FjYWMzdUtjT1N1WUJiL2lRKzI1cU9BazZaTStoSTVxMWQKUm1uVzBIQmpzNmg1bVlDODJrSVcrWStEYWN5bUx3OTF3S2ptTXlvMnh4OTBRb0IvWnBSVUxiNjVvWmlkcHZEawpOMStleFg4QmhIeE85S0lhMFFvcThVWFdLTjN4anZRb1pVanFieXY1VWFvcjBwbWpKT1NLKzJLMllRSk9FbUxaCkFDdEtzUDNpaU1UTlRXYUpxVjdWUVZaL3dRUVdsQ1h3VFp3WGlicXk0Z0kwb3JrcVNha0gzVFZMblVrRlFKU24KUi8waU1RRVFzQW5kajZBcVhlQml3ZG5aSGc9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==  # noqa: E501
     server: https://10.5.1.180:16443
-  name: microk8s-cluster
+  name: k8s-cluster
 contexts:
 - context:
-    cluster: microk8s-cluster
+    cluster: k8s-cluster
     user: admin
-  name: microk8s
-current-context: microk8s
+  name: k8s
+current-context: k8s
 kind: Config
 preferences: {}
 users:
@@ -73,13 +73,13 @@ clusters:
 - cluster:
     certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUREekNDQWZlZ0F3SUJBZ0lVSDh2MmtKZDE0TEs4VWIrM1RmUGVUY21pMWNrd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01NVEF1TVRVeUxqRTRNeTR4TUI0WERUSXpNRFF3TkRBMU1Ua3lOVm9YRFRNegpNRFF3TVRBMU1Ua3lOVm93RnpFVk1CTUdBMVVFQXd3TU1UQXVNVFV5TGpFNE15NHhNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUF4RWkwVFhldmJYNFNvZ2VsRW16T0NQU2tYNHloOURCVGd6WFEKQkdJQTF4TDFwZ09mRkNMNzZYSlROSU4rYUNPT1BoVGp6dXoyR3dpR05pMHVBdnZyUGVrN0p0cEliUjg4YjRSQQpZUTRtMTllMU5zVjdwZ2pHL0JEQzVza1dycVpoZTR5ZTZoOXI2OXpKb1l5NEE4eFZLb1MvdElBZkdSejZvaS9uCndpY0ZzKzQyc29icm92MFdyUm5KbFV4eisyVHB2TFA1TW40eUExZHpGV0RLMTVCemVHa1YyYTVDeHBqcFBBTE4KVzUwVWlvSittbHBmTmwvYzZKWmFaZDR4S1NxclppU2dCY3BOQlhvWjJYVHpDOVNJTFF5RGZpZUpVNWxOcEIwSgpvSUphT0UvOTNseGp1bUdsSlRLSS9ucmpYM241UDFyaFFlWTNxV2p5S21ZNlFucjRqUUlEQVFBQm8xTXdVVEFkCkJnTlZIUTRFRmdRVU0yVTBMSTZtcGFaOTVkTnlIRGs1ZlZCck5ISXdId1lEVlIwakJCZ3dGb0FVTTJVMExJNm0KcGFaOTVkTnlIRGs1ZlZCck5ISXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QU5CZ2txaGtpRzl3MEJBUXNGQUFPQwpBUUVBZzZITWk4eTQrSENrOCtlb1FuamlmOHd4MytHVDZFNk02SWdRWWRvSFJjYXNYZ0JWLzd6OVRHQnpNeG1aCmdrL0Fnc08yQitLUFh3NmdQZU1GL1JLMjhGNlovK0FjYWMzdUtjT1N1WUJiL2lRKzI1cU9BazZaTStoSTVxMWQKUm1uVzBIQmpzNmg1bVlDODJrSVcrWStEYWN5bUx3OTF3S2ptTXlvMnh4OTBRb0IvWnBSVUxiNjVvWmlkcHZEawpOMStleFg4QmhIeE85S0lhMFFvcThVWFdLTjN4anZRb1pVanFieXY1VWFvcjBwbWpKT1NLKzJLMllRSk9FbUxaCkFDdEtzUDNpaU1UTlRXYUpxVjdWUVZaL3dRUVdsQ1h3VFp3WGlicXk0Z0kwb3JrcVNha0gzVFZMblVrRlFKU24KUi8waU1RRVFzQW5kajZBcVhlQml3ZG5aSGc9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==  # noqa: E501
     server: https://10.5.1.180:16443
-  name: microk8s-cluster
+  name: k8s-cluster
 contexts:
 - context:
-    cluster: microk8s-cluster
+    cluster: k8s-cluster
     user: admin
-  name: microk8s
-current-context: microk8s
+  name: k8s
+current-context: k8s
 kind: Config
 preferences: {}
 users:
@@ -99,23 +99,23 @@ def _unit_getter(u, m):
 @pytest.fixture
 def applications() -> dict[str, Application]:
     mock = MagicMock()
-    microk8s_unit_mock = AsyncMock(
-        entity_id="microk8s/0",
+    k8s_unit_mock = AsyncMock(
+        entity_id="k8s/0",
         agent_status="idle",
         workload_status="active",
     )
-    microk8s_unit_mock.is_leader_from_status.return_value = True
+    k8s_unit_mock.is_leader_from_status.return_value = True
 
-    macrok8s_unit_mock = AsyncMock(
-        entity_id="macrok8s/0",
+    mk8s_unit_mock = AsyncMock(
+        entity_id="mk8s/0",
         agent_status="idle",
         workload_status="active",
     )
-    macrok8s_unit_mock.is_leader_from_status.return_value = False
+    mk8s_unit_mock.is_leader_from_status.return_value = False
 
     app_dict = {
-        "microk8s": AsyncMock(status="active", units=[microk8s_unit_mock]),
-        "macrok8s": AsyncMock(status="unknown", units=[macrok8s_unit_mock]),
+        "k8s": AsyncMock(status="active", units=[k8s_unit_mock]),
+        "mk8s": AsyncMock(status="unknown", units=[mk8s_unit_mock]),
     }
     mock.get.side_effect = app_dict.get
     mock.__getitem__.side_effect = app_dict.__getitem__
@@ -125,29 +125,29 @@ def applications() -> dict[str, Application]:
 @pytest.fixture
 def units() -> dict[str, Unit]:
     mock = MagicMock()
-    microk8s_0_unit_mock = AsyncMock(
-        entity_id="microk8s/0",
+    k8s_0_unit_mock = AsyncMock(
+        entity_id="k8s/0",
         agent_status="idle",
         workload_status="active",
     )
-    microk8s_0_unit_mock.run_action.return_value = AsyncMock(
+    k8s_0_unit_mock.run_action.return_value = AsyncMock(
         _status="completed",
         results={"exit_code": 0},
     )
 
-    microk8s_1_unit_mock = AsyncMock(
-        entity_id="microk8s/1",
+    k8s_1_unit_mock = AsyncMock(
+        entity_id="k8s/1",
         agent_status="unknown",
         workload_status="unknown",
     )
-    microk8s_1_unit_mock.run_action.return_value = AsyncMock(
+    k8s_1_unit_mock.run_action.return_value = AsyncMock(
         _status="failed",
         results={"exit_code": 1},
     )
 
     unit_dict = {
-        "microk8s/0": microk8s_0_unit_mock,
-        "microk8s/1": microk8s_1_unit_mock,
+        "k8s/0": k8s_0_unit_mock,
+        "k8s/1": k8s_1_unit_mock,
     }
     mock.get.side_effect = unit_dict.get
     mock.__getitem__.side_effect = unit_dict.__getitem__
@@ -268,8 +268,8 @@ async def test_jhelper_get_model_name_with_owner_model_missing(
 
 @pytest.mark.asyncio
 async def test_jhelper_get_unit(jhelper: juju.JujuHelper, units):
-    await jhelper.get_unit("microk8s/0", "control-plane")
-    units.get.assert_called_with("microk8s/0")
+    await jhelper.get_unit("k8s/0", "control-plane")
+    units.get.assert_called_with("k8s/0")
 
 
 @pytest.mark.asyncio
@@ -288,18 +288,18 @@ async def test_jhelper_get_unit_invalid_name(jhelper: juju.JujuHelper):
     with pytest.raises(
         ValueError,
         match=(
-            "Name 'microk8s' has invalid format, "
+            "Name 'k8s' has invalid format, "
             "should be a valid unit of format application/id"
         ),
     ):
-        await jhelper.get_unit("microk8s", "control-plane")
+        await jhelper.get_unit("k8s", "control-plane")
 
 
 @pytest.mark.asyncio
 async def test_jhelper_get_leader_unit(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    app = "microk8s"
+    app = "k8s"
     unit = await jhelper.get_leader_unit(app, "control-plane")
     assert unit is not None
     assert applications.get.called_with(app)
@@ -319,7 +319,7 @@ async def test_jhelper_get_leader_unit_missing_application(jhelper: juju.JujuHel
 @pytest.mark.asyncio
 async def test_jhelper_get_leader_unit_missing(jhelper: juju.JujuHelper):
     model = "control-plane"
-    app = "macrok8s"
+    app = "mk8s"
     with pytest.raises(
         juju.LeaderNotFoundException,
         match=f"Leader for application {app!r} is missing from model {model!r}",
@@ -331,9 +331,9 @@ async def test_jhelper_get_leader_unit_missing(jhelper: juju.JujuHelper):
 async def test_jhelper_get_application(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    app = await jhelper.get_application("microk8s", "control-plane")
+    app = await jhelper.get_application("k8s", "control-plane")
     assert app is not None
-    assert applications.get.called_with("microk8s")
+    assert applications.get.called_with("k8s")
 
 
 @pytest.mark.asyncio
@@ -350,16 +350,16 @@ async def test_jhelper_get_application_missing(jhelper: juju.JujuHelper):
 async def test_jhelper_add_unit(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    await jhelper.add_unit("microk8s", "control-plane")
-    applications["microk8s"].add_unit.assert_called_with(1, None)
+    await jhelper.add_unit("k8s", "control-plane")
+    applications["k8s"].add_unit.assert_called_with(1, None)
 
 
 @pytest.mark.asyncio
 async def test_jhelper_add_unit_to_machine(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    await jhelper.add_unit("microk8s", "control-plane", machine="0")
-    applications["microk8s"].add_unit.assert_called_with(1, "0")
+    await jhelper.add_unit("k8s", "control-plane", machine="0")
+    applications["k8s"].add_unit.assert_called_with(1, "0")
 
 
 @pytest.mark.asyncio
@@ -379,8 +379,8 @@ async def test_jhelper_add_unit_to_missing_application(
 async def test_jhelper_remove_unit(
     jhelper: juju.JujuHelper, applications: dict[str, Application]
 ):
-    await jhelper.remove_unit("microk8s", "microk8s/0", "control-plane")
-    applications["microk8s"].destroy_unit.assert_called_with("microk8s/0")
+    await jhelper.remove_unit("k8s", "k8s/0", "control-plane")
+    applications["k8s"].destroy_unit.assert_called_with("k8s/0")
 
 
 @pytest.mark.asyncio
@@ -404,16 +404,16 @@ async def test_jhelper_remove_unit_invalid_unit(
     with pytest.raises(
         ValueError,
         match=(
-            "Name 'microk8s' has invalid format, "
+            "Name 'k8s' has invalid format, "
             "should be a valid unit of format application/id"
         ),
     ):
-        await jhelper.remove_unit("microk8s", "microk8s", "control-plane")
+        await jhelper.remove_unit("k8s", "k8s", "control-plane")
 
 
 @pytest.mark.asyncio
 async def test_jhelper_run_action(jhelper: juju.JujuHelper, units):
-    unit = "microk8s/0"
+    unit = "k8s/0"
     action_name = "get-action"
     await jhelper.run_action(unit, "control-plane", action_name)
     units.get(unit).run_action.assert_called_once_with(action_name)
@@ -425,12 +425,12 @@ async def test_jhelper_run_action_failed(jhelper: juju.JujuHelper):
         juju.ActionFailedException,
         match="action failed...",
     ):
-        await jhelper.run_action("microk8s/1", "control-plane", "get-action")
+        await jhelper.run_action("k8s/1", "control-plane", "get-action")
 
 
 @pytest.mark.asyncio
 async def test_jhelper_scp_from(jhelper: juju.JujuHelper, units):
-    unit = "microk8s/0"
+    unit = "k8s/0"
     await jhelper.scp_from(unit, "control-plane", "source", "destination")
     units.get(unit).scp_from.assert_called_once_with("source", "destination")
 
@@ -438,13 +438,13 @@ async def test_jhelper_scp_from(jhelper: juju.JujuHelper, units):
 @pytest.mark.asyncio
 async def test_jhelper_add_k8s_cloud(jhelper: juju.JujuHelper):
     kubeconfig = yaml.safe_load(kubeconfig_yaml)
-    await jhelper.add_k8s_cloud("microk8s", "microk8s-creds", kubeconfig)
+    await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
 @pytest.mark.asyncio
 async def test_jhelper_add_k8s_cloud_with_client_certificate(jhelper: juju.JujuHelper):
     kubeconfig = yaml.safe_load(kubeconfig_clientcertificate_yaml)
-    await jhelper.add_k8s_cloud("microk8s", "microk8s-creds", kubeconfig)
+    await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
 @pytest.mark.asyncio
@@ -457,22 +457,22 @@ async def test_jhelper_add_k8s_cloud_unsupported_kubeconfig(jhelper: juju.JujuHe
             "supported"
         ),
     ):
-        await jhelper.add_k8s_cloud("microk8s", "microk8s-creds", kubeconfig)
+        await jhelper.add_k8s_cloud("k8s", "k8s-creds", kubeconfig)
 
 
-test_data_microk8s = [
-    ("wait_application_ready", "microk8s", "application 'microk8s'", [["blocked"]]),
+test_data_k8s = [
+    ("wait_application_ready", "k8s", "application 'k8s'", [["blocked"]]),
     (
         "wait_units_ready",
-        "microk8s/0",
-        "units microk8s/0",
+        "k8s/0",
+        "units k8s/0",
         [{"agent": "idle", "workload": "blocked"}],
     ),
 ]
 
 test_data_custom_status = [
-    ("wait_application_ready", "macrok8s", ["unknown"]),
-    ("wait_units_ready", "microk8s/1", {"agent": "unknown", "workload": "unknown"}),
+    ("wait_application_ready", "mk8s", ["unknown"]),
+    ("wait_units_ready", "k8s/1", {"agent": "unknown", "workload": "unknown"}),
 ]
 
 test_data_missing = [
@@ -482,7 +482,7 @@ test_data_missing = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity,error,args", test_data_microk8s)
+@pytest.mark.parametrize("method,entity,error,args", test_data_k8s)
 async def test_jhelper_wait_ready(
     jhelper: juju.JujuHelper, model: Model, method: str, entity: str, error: str, args
 ):
@@ -493,7 +493,7 @@ async def test_jhelper_wait_ready(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method,entity,error,args", test_data_microk8s)
+@pytest.mark.parametrize("method,entity,error,args", test_data_k8s)
 async def test_jhelper_wait_application_ready_timeout(
     jhelper: juju.JujuHelper, model: Model, method: str, entity: str, error: str, args
 ):
@@ -570,6 +570,6 @@ async def test_get_available_charm_revision(jhelper: juju.JujuHelper, model):
         charmhub.info.return_value = cmd_out
         p.return_value = charmhub
         revno = await jhelper.get_available_charm_revision(
-            "openstack", "microk8s", "legacy/edge"
+            "openstack", "k8s", "legacy/edge"
         )
         assert revno == 121

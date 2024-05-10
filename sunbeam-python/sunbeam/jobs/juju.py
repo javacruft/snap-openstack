@@ -436,6 +436,23 @@ class JujuHelper:
             f"Leader for application {name!r} is missing from model {model!r}"
         )
 
+    async def run_cmd_on_machine_unit(
+        self, name: str, model: str, cmd: str, timeout=None
+    ):
+        """Run a shell command on a machine unit.
+
+        :name: unit name
+        :model: Name of the model where the application is located
+        :cmd: Command to run
+        :timeout: Timeout in seconds
+        :returns: Command results
+        """
+        unit = await self.get_unit(name, model)
+        action = await unit.run(cmd, timeout=timeout, block=True)
+        if action.results["return-code"] != 0:
+            raise CmdFailedException(action.results["stderr"])
+        return action.results
+
     async def run_cmd_on_unit_payload(
         self,
         name: str,
@@ -463,7 +480,10 @@ class JujuHelper:
                 "--",
             ]
         )
-        action = await unit.run(pebble + " " + cmd, timeout=timeout, block=True)
+        try:
+            action = await unit.run(pebble + " " + cmd, timeout=timeout, block=True)
+        except asyncio.TimeoutError as e:
+            raise TimeoutException(f"Timeout while running command: {cmd}") from e
         if action.results["return-code"] != 0:
             raise CmdFailedException(action.results["stderr"])
         return action.results
@@ -523,7 +543,7 @@ class JujuHelper:
                 auth_types=["oauth2", "clientcertificate"],
                 ca_certificates=[caCert],
                 endpoint=ep,
-                host_cloud_region="microk8s/localhost",
+                host_cloud_region="k8s/localhost",
                 regions=[jujuClient.CloudRegion(endpoint=ep, name="localhost")],
                 type_="kubernetes",
             )

@@ -32,7 +32,11 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.juju import JujuLoginStep
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.commands.terraform import TerraformException, TerraformInitStep
+from sunbeam.commands.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformInitStep,
+)
 from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import (
@@ -44,7 +48,7 @@ from sunbeam.jobs.juju import (
     UnitNotFoundException,
     run_sync,
 )
-from sunbeam.jobs.manifest import Manifest
+from sunbeam.jobs.manifest import CharmManifest, Manifest, SoftwareConfig
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
@@ -196,9 +200,8 @@ class ConfigureValidationStep(BaseStep):
         self,
         config_changes: Config,
         client: Client,
+        tfhelper: TerraformHelper,
         manifest: Manifest,
-        tfplan: str,
-        tfvar_map: dict,
         tfvar_config: str,
     ):
         super().__init__(
@@ -207,16 +210,15 @@ class ConfigureValidationStep(BaseStep):
         )
         self.config_changes = config_changes
         self.client = client
+        self.tfhelper = tfhelper
         self.manifest = manifest
-        self.tfplan = tfplan
-        self.tfvar_map = tfvar_map
         self.tfvar_config = tfvar_config
 
     def run(self, status: Optional[Status] = None) -> Result:
         """Execute step using terraform."""
         try:
             # See ValidationPlugin.manifest_attributes_tfvar_map
-            charms = self.tfvar_map[self.tfplan]["charms"]
+            charms = self.tfhelper.tfvar_map["charms"]
             tempest_k8s_config_var = charms["tempest-k8s"]["config"]
             if self.config_changes.schedule is None:
                 override_tfvars = {}
@@ -224,9 +226,9 @@ class ConfigureValidationStep(BaseStep):
                 override_tfvars = {
                     tempest_k8s_config_var: {"schedule": self.config_changes.schedule}
                 }
-            self.manifest.update_tfvars_and_apply_tf(
+            self.tfhelper.update_tfvars_and_apply_tf(
                 self.client,
-                tfplan=self.tfplan,
+                self.manifest,
                 tfvar_config=self.tfvar_config,
                 override_tfvars=override_tfvars,
             )
@@ -250,9 +252,11 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {"charms": {"tempest-k8s": {"channel": TEMPEST_CHANNEL}}}
+    def manifest_defaults(self) -> SoftwareConfig:
+        """Plugin software configuration"""
+        return SoftwareConfig(
+            charms={"tempest-k8s": CharmManifest(channel=TEMPEST_CHANNEL)}
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attributes terraformvars map."""
@@ -446,15 +450,15 @@ class ValidationPlugin(OpenStackControlPlanePlugin):
 
         config_changes = validated_config_args(parse_config_args(options))
 
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
         run_plan(
             [
-                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
+                TerraformInitStep(tfhelper),
                 ConfigureValidationStep(
                     config_changes,
                     self.deployment.get_client(),
+                    tfhelper,
                     self.manifest,
-                    self.tfplan,
-                    self.manifest_attributes_tfvar_map(),
                     self.get_tfvar_config_key(),
                 ),
             ],

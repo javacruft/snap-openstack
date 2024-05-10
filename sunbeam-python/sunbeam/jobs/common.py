@@ -27,13 +27,9 @@ from click import decorators
 from juju.client.client import FullStatus
 from rich.console import Console
 from rich.status import Status
+from snaphelpers import Snap, UnknownConfigKey
 
 from sunbeam.clusterd.client import Client
-from sunbeam.clusterd.service import (
-    ClusterServiceUnavailableException,
-    ConfigItemNotFoundException,
-)
-from sunbeam.jobs.deployment import PROXY_CONFIG_KEY, Deployment
 
 LOG = logging.getLogger(__name__)
 RAM_16_GB_IN_KB = 16 * 1000 * 1000
@@ -412,34 +408,6 @@ def _get_default_no_proxy_settings() -> set:
     }
 
 
-def get_proxy_settings(deployment: Deployment) -> dict:
-    proxy = {}
-    try:
-        # If client does not exist, use detaults
-        client = deployment.get_client()
-        proxy_from_db = read_config(client, PROXY_CONFIG_KEY).get("proxy", {})
-        if proxy_from_db.get("proxy_required"):
-            proxy = {
-                p.upper(): v
-                for p in ("http_proxy", "https_proxy", "no_proxy")
-                if (v := proxy_from_db.get(p))
-            }
-    except (
-        ClusterServiceUnavailableException,
-        ConfigItemNotFoundException,
-        ValueError,
-    ) as e:
-        LOG.debug(f"Using default Proxy settings from provider due to {str(e)}")
-        proxy = deployment.get_default_proxy_settings()
-
-    if "NO_PROXY" in proxy:
-        no_proxy_list = set(proxy.get("NO_PROXY").split(","))
-        default_no_proxy_list = _get_default_no_proxy_settings()
-        proxy["NO_PROXY"] = ",".join(no_proxy_list.union(default_no_proxy_list))
-
-    return proxy
-
-
 def convert_proxy_to_model_configs(proxy_settings: dict) -> dict:
     """Convert proxies to juju model configs."""
     return {
@@ -449,3 +417,36 @@ def convert_proxy_to_model_configs(proxy_settings: dict) -> dict:
         "snap-http-proxy": proxy_settings.get("HTTP_PROXY", ""),
         "snap-https-proxy": proxy_settings.get("HTTPS_PROXY", ""),
     }
+
+
+class SunbeamException(Exception):
+    """Base exception for sunbeam."""
+
+    pass
+
+
+class RiskLevel(str, enum.Enum):
+    STABLE = "stable"
+    CANDIDATE = "candidate"
+    BETA = "beta"
+    EDGE = "edge"
+
+
+def infer_risk(snap: Snap) -> RiskLevel:
+    """Compute risk level from environment."""
+    try:
+        risk = snap.config.get("deployment.risk")
+    except UnknownConfigKey:
+        return RiskLevel.STABLE
+
+    match risk:
+        case "candidate":
+            return RiskLevel.CANDIDATE
+        # Beta and edge are considered the same for now
+        case "beta":
+            LOG.debug("Beta channel detected, using edge instead.")
+            return RiskLevel.EDGE
+        case "edge":
+            return RiskLevel.EDGE
+        case _:
+            return RiskLevel.STABLE

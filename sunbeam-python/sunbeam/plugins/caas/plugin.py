@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import logging
-from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -29,11 +28,20 @@ from sunbeam.clusterd.client import Client
 from sunbeam.clusterd.service import ClusterServiceUnavailableException
 from sunbeam.commands.configure import retrieve_admin_credentials
 from sunbeam.commands.openstack import OPENSTACK_MODEL
-from sunbeam.commands.terraform import TerraformException, TerraformInitStep
+from sunbeam.commands.terraform import (
+    TerraformException,
+    TerraformHelper,
+    TerraformInitStep,
+)
 from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
-from sunbeam.jobs.manifest import Manifest, SoftwareConfig
+from sunbeam.jobs.manifest import (
+    CharmManifest,
+    Manifest,
+    SoftwareConfig,
+    TerraformManifest,
+)
 from sunbeam.plugins.interface.v1.base import PluginRequirement
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
@@ -66,8 +74,8 @@ class CaasConfigureStep(BaseStep):
     def __init__(
         self,
         client: Client,
+        tfhelper: TerraformHelper,
         manifest: Manifest,
-        tfplan: str,
         tfvar_map: dict,
     ):
         super().__init__(
@@ -75,8 +83,8 @@ class CaasConfigureStep(BaseStep):
             "Configure Cloud for Container as a Service use",
         )
         self.client = client
+        self.tfhelper = tfhelper
         self.manifest = manifest
-        self.tfplan = tfplan
         self.tfvar_map = tfvar_map
 
     def run(self, status: Optional[Status] = None) -> Result:
@@ -84,10 +92,12 @@ class CaasConfigureStep(BaseStep):
         try:
             override_tfvars = {}
             try:
-                manifest_caas_config = asdict(self.manifest.software_config.caas_config)
-                for caas_config_attribute, tfvar_name in (
-                    self.tfvar_map.get(self.tfplan, {}).get("caas_config", {}).items()
-                ):
+                manifest_caas_config = self.manifest.software.extra[
+                    "caas_config"
+                ].model_dump()
+                for caas_config_attribute, tfvar_name in self.tfhelper.tfvar_map.get(
+                    "caas_config", {}
+                ).items():
                     caas_config_attribute_ = manifest_caas_config.get(
                         caas_config_attribute
                     )
@@ -97,8 +107,8 @@ class CaasConfigureStep(BaseStep):
                 # caas_config not defined in manifest, ignore
                 pass
 
-            self.manifest.update_tfvars_and_apply_tf(
-                self.client, tfplan=self.tfplan, override_tfvars=override_tfvars
+            self.tfhelper.update_tfvars_and_apply_tf(
+                self.client, self.manifest, override_tfvars=override_tfvars
             )
         except TerraformException as e:
             LOG.exception("Error configuring Container as a Service plugin.")
@@ -123,18 +133,16 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         )
         self.configure_plan = "caas-setup"
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {
-            "charms": {
-                "magnum-k8s": {"channel": OPENSTACK_CHANNEL},
+    def manifest_defaults(self) -> SoftwareConfig:
+        """Plugin software configuration"""
+        return SoftwareConfig(
+            charms={"magnum-k8s": CharmManifest(channel=OPENSTACK_CHANNEL)},
+            terraform={
+                self.configure_plan: TerraformManifest(
+                    source=Path(__file__).parent / "etc" / self.configure_plan
+                ),
             },
-            "terraform": {
-                self.configure_plan: {
-                    "source": Path(__file__).parent / "etc" / self.configure_plan
-                },
-            },
-        }
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attributes terraformvars map."""
@@ -161,12 +169,17 @@ class CaasPlugin(OpenStackControlPlanePlugin):
 
     def add_manifest_section(self, software_config: SoftwareConfig) -> None:
         """Adds manifest section"""
-        try:
-            _caas_config = software_config.caas_config
-            software_config.caas_config = CaasConfig(**_caas_config)
-        except AttributeError:
-            # Attribute not defined in manifest
-            software_config.caas_config = CaasConfig()
+        caas_config = software_config.extra.get("caas_config")
+        if caas_config is None:
+            software_config.extra["caas_config"] = CaasConfig()
+            return
+        if isinstance(caas_config, CaasConfig):
+            # Already instanciation of the schema, nothing to do
+            return
+        elif isinstance(caas_config, dict):
+            software_config.extra["caas_config"] = CaasConfig(**caas_config)
+        else:
+            raise ValueError(f"Invalid caas_config in manifest: {caas_config!r}")
 
     def set_application_names(self) -> list:
         """Application names handled by the terraform plan."""
@@ -210,14 +223,14 @@ class CaasPlugin(OpenStackControlPlanePlugin):
         jhelper = JujuHelper(self.deployment.get_connected_controller())
         admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
-        tfhelper = self.manifest.get_tfhelper(self.configure_plan)
+        tfhelper = self.deployment.get_tfhelper(self.configure_plan)
         tfhelper.env = admin_credentials
         plan = [
             TerraformInitStep(tfhelper),
             CaasConfigureStep(
                 self.deployment.get_client(),
+                tfhelper,
                 self.manifest,
-                self.configure_plan,
                 self.manifest_attributes_tfvar_map(),
             ),
         ]

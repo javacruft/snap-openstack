@@ -23,7 +23,6 @@ from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import click_option_topology, run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
-from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -39,18 +38,18 @@ def resize(ctx: click.Context, topology: str, force: bool = False) -> None:
     """Expand the control plane to fit available nodes."""
     deployment: Deployment = ctx.obj
     client: Client = deployment.get_client()
-    manifest_obj = Manifest.load_latest_from_clusterdb(
-        deployment, include_defaults=True
-    )
+    manifest = deployment.get_manifest()
 
     tfplan = "openstack-plan"
+    tfhelper = deployment.get_tfhelper(tfplan)
     jhelper = JujuHelper(deployment.get_connected_controller())
     plan = [
-        TerraformInitStep(manifest_obj.get_tfhelper(tfplan)),
+        TerraformInitStep(tfhelper),
         DeployControlPlaneStep(
             client,
-            manifest_obj,
+            tfhelper,
             jhelper,
+            manifest,
             topology,
             "auto",
             deployment.infrastructure_model,

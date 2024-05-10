@@ -636,6 +636,7 @@ class TestDeploySunbeamClusterdApplicationStep:
     def test_run_when_controller_machines_found(self, manifest, model):
         jhelper = AsyncMock()
         jhelper.get_application.return_value = AsyncMock()
+        manifest.software.charms = {"sunbeam-clusterd": Mock(config={})}
         step = DeploySunbeamClusterdApplicationStep(jhelper, manifest, model)
         step._get_controller_machines = MagicMock(return_value=["1", "2", "3"])
         result = step.run()

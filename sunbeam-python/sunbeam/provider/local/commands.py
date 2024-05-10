@@ -62,6 +62,14 @@ from sunbeam.commands.juju import (
     RemoveJujuMachineStep,
     SaveJujuUserLocallyStep,
 )
+from sunbeam.commands.k8s import (
+    AddK8SCloudStep,
+    AddK8SUnitsStep,
+    DeployK8SApplicationStep,
+    EnableK8SFeatures,
+    RemoveK8SUnitStep,
+    StoreK8SKubeConfigStep,
+)
 from sunbeam.commands.microceph import (
     AddMicrocephUnitsStep,
     ConfigureMicrocephOSDStep,
@@ -108,7 +116,6 @@ from sunbeam.jobs.common import (
     ResultType,
     Role,
     click_option_topology,
-    get_proxy_settings,
     get_step_message,
     roles_to_str_list,
     run_plan,
@@ -117,7 +124,7 @@ from sunbeam.jobs.common import (
 )
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import CONTROLLER, JujuHelper, ModelNotFoundException, run_sync
-from sunbeam.jobs.manifest import AddManifestStep, Manifest
+from sunbeam.jobs.manifest import AddManifestStep
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.local.deployment import LOCAL_TYPE, LocalDeployment
 from sunbeam.provider.local.steps import LocalSetHypervisorUnitsOptionsStep
@@ -172,6 +179,7 @@ class LocalProvider(ProviderBase):
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
@@ -210,7 +218,7 @@ def bootstrap(
     roles: list[Role],
     topology: str,
     database: str,
-    manifest: Path | None = None,
+    manifest_path: Path | None = None,
     accept_defaults: bool = False,
 ) -> None:
     """Bootstrap the local node.
@@ -221,22 +229,11 @@ def bootstrap(
     client = deployment.get_client()
     snap = Snap()
 
-    # Validate manifest file
-    manifest_obj = None
-    if manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-    else:
-        manifest_obj = Manifest.get_default_manifest(deployment)
+    manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(
-        f"Manifest used for deployment - preseed: {manifest_obj.deployment_config}"
-    )
-    LOG.debug(
-        f"Manifest used for deployment - software: {manifest_obj.software_config}"
-    )
-    preseed = manifest_obj.deployment_config
+    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment}")
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
+    preseed = manifest.deployment
 
     # Bootstrap node must always have the control role
     if Role.CONTROL not in roles:
@@ -254,10 +251,11 @@ def bootstrap(
 
     cloud_type = snap.config.get("juju.cloud.type")
     cloud_name = snap.config.get("juju.cloud.name")
+    k8s_provider = snap.config.get("k8s.provider")
     cloud_definition = JujuHelper.manual_cloud(
         cloud_name, utils.get_local_ip_by_default_route()
     )
-    juju_bootstrap_args = manifest_obj.software_config.juju.bootstrap_args
+    juju_bootstrap_args = manifest.software.juju.bootstrap_args
     data_location = snap.paths.user_data
 
     preflight_checks = []
@@ -278,8 +276,7 @@ def bootstrap(
     plan.append(JujuLoginStep(deployment.juju_account))
     # bootstrapped node is always machine 0 in controller model
     plan.append(ClusterInitStep(client, roles_to_str_list(roles), 0))
-    if manifest:
-        plan.append(AddManifestStep(client, manifest))
+    plan.append(AddManifestStep(client, manifest_path))
     plan.append(
         PromptForProxyStep(
             deployment, accept_defaults=accept_defaults, deployment_preseed=preseed
@@ -287,7 +284,7 @@ def bootstrap(
     )
     run_plan(plan, console)
 
-    proxy_settings = get_proxy_settings(deployment)
+    proxy_settings = deployment.get_proxy_settings()
     LOG.debug(f"Proxy settings: {proxy_settings}")
 
     plan1 = []
@@ -326,12 +323,14 @@ def bootstrap(
     jhelper = JujuHelper(deployment.get_connected_controller())
     plan4 = []
     # Deploy sunbeam machine charm
-    plan4.append(TerraformInitStep(manifest_obj.get_tfhelper("sunbeam-machine-plan")))
+    sunbeam_machine_tfhelper = deployment.get_tfhelper("sunbeam-machine-plan")
+    plan4.append(TerraformInitStep(sunbeam_machine_tfhelper))
     plan4.append(
         DeploySunbeamMachineApplicationStep(
             client,
-            manifest_obj,
+            sunbeam_machine_tfhelper,
             jhelper,
+            manifest,
             deployment.infrastructure_model,
             refresh=True,
             proxy_settings=proxy_settings,
@@ -342,30 +341,63 @@ def bootstrap(
             client, fqdn, jhelper, deployment.infrastructure_model
         )
     )
-    # Deploy Microk8s application during bootstrap irrespective of node role.
-    plan4.append(TerraformInitStep(manifest_obj.get_tfhelper("microk8s-plan")))
-    plan4.append(
-        DeployMicrok8sApplicationStep(
-            client,
-            manifest_obj,
-            jhelper,
-            deployment.infrastructure_model,
-            accept_defaults=accept_defaults,
-            deployment_preseed=preseed,
+
+    if k8s_provider == "k8s":
+        k8s_tfhelper = deployment.get_tfhelper("k8s-plan")
+        plan4.append(TerraformInitStep(k8s_tfhelper))
+        plan4.append(
+            DeployK8SApplicationStep(
+                client,
+                k8s_tfhelper,
+                jhelper,
+                manifest,
+                deployment.infrastructure_model,
+                accept_defaults=accept_defaults,
+                deployment_preseed=preseed,
+            )
         )
-    )
-    plan4.append(
-        AddMicrok8sUnitsStep(client, fqdn, jhelper, deployment.infrastructure_model)
-    )
-    plan4.append(
-        StoreMicrok8sConfigStep(client, jhelper, deployment.infrastructure_model)
-    )
-    plan4.append(AddMicrok8sCloudStep(client, jhelper))
+        plan4.append(
+            AddK8SUnitsStep(client, fqdn, jhelper, deployment.infrastructure_model)
+        )
+        plan4.append(
+            EnableK8SFeatures(client, jhelper, deployment.infrastructure_model)
+        )
+        plan4.append(
+            StoreK8SKubeConfigStep(client, jhelper, deployment.infrastructure_model)
+        )
+        plan4.append(AddK8SCloudStep(client, jhelper))
+    else:
+        k8s_tfhelper = deployment.get_tfhelper("microk8s-plan")
+        plan4.append(TerraformInitStep(k8s_tfhelper))
+        plan4.append(
+            DeployMicrok8sApplicationStep(
+                client,
+                k8s_tfhelper,
+                jhelper,
+                manifest,
+                deployment.infrastructure_model,
+                accept_defaults=accept_defaults,
+                deployment_preseed=preseed,
+            )
+        )
+        plan4.append(
+            AddMicrok8sUnitsStep(client, fqdn, jhelper, deployment.infrastructure_model)
+        )
+        plan4.append(
+            StoreMicrok8sConfigStep(client, jhelper, deployment.infrastructure_model)
+        )
+        plan4.append(AddMicrok8sCloudStep(client, jhelper))
+
     # Deploy Microceph application during bootstrap irrespective of node role.
-    plan4.append(TerraformInitStep(manifest_obj.get_tfhelper("microceph-plan")))
+    microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
+    plan4.append(TerraformInitStep(microceph_tfhelper))
     plan4.append(
         DeployMicrocephApplicationStep(
-            client, manifest_obj, jhelper, deployment.infrastructure_model
+            client,
+            microceph_tfhelper,
+            jhelper,
+            manifest,
+            deployment.infrastructure_model,
         )
     )
 
@@ -386,13 +418,15 @@ def bootstrap(
             )
         )
 
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
     if is_control_node:
-        plan4.append(TerraformInitStep(manifest_obj.get_tfhelper("openstack-plan")))
+        plan4.append(TerraformInitStep(openstack_tfhelper))
         plan4.append(
             DeployControlPlaneStep(
                 client,
-                manifest_obj,
+                openstack_tfhelper,
                 jhelper,
+                manifest,
                 topology,
                 database,
                 deployment.infrastructure_model,
@@ -411,12 +445,15 @@ def bootstrap(
     # NOTE(jamespage):
     # As with MicroCeph, always deploy the openstack-hypervisor charm
     # and add a unit to the bootstrap node if required.
-    plan5.append(TerraformInitStep(manifest_obj.get_tfhelper("hypervisor-plan")))
+    hypervisor_tfhelper = deployment.get_tfhelper("hypervisor-plan")
+    plan5.append(TerraformInitStep(hypervisor_tfhelper))
     plan5.append(
         DeployHypervisorApplicationStep(
             client,
-            manifest_obj,
+            hypervisor_tfhelper,
+            openstack_tfhelper,
             jhelper,
+            manifest,
             deployment.infrastructure_model,
         )
     )
@@ -526,6 +563,8 @@ def join(
     pretty_roles = ", ".join(role_.name.lower() for role_ in roles)
     LOG.debug(f"Node joining the cluster with roles: {pretty_roles}")
 
+    k8s_provider = Snap().config.get("k8s.provider")
+
     preflight_checks = []
     preflight_checks.append(SystemRequirementsCheck())
     preflight_checks.append(JujuSnapCheck())
@@ -558,10 +597,8 @@ def join(
     deployment.reload_juju_credentials()
 
     # Get manifest object once the cluster is joined
-    manifest_obj = Manifest.load_latest_from_clusterdb(
-        deployment, include_defaults=True
-    )
-    preseed = manifest_obj.deployment_config
+    manifest = deployment.get_manifest()
+    preseed = manifest.deployment
 
     machine_id = -1
     machine_id_result = get_step_message(plan1_results, AddJujuMachineStep)
@@ -578,9 +615,16 @@ def join(
     )
 
     if is_control_node:
-        plan2.append(
-            AddMicrok8sUnitsStep(client, name, jhelper, deployment.infrastructure_model)
-        )
+        if k8s_provider == "k8s":
+            plan2.append(
+                AddK8SUnitsStep(client, name, jhelper, deployment.infrastructure_model)
+            )
+        else:
+            plan2.append(
+                AddMicrok8sUnitsStep(
+                    client, name, jhelper, deployment.infrastructure_model
+                )
+            )
 
     if is_storage_node:
         plan2.append(
@@ -602,10 +646,6 @@ def join(
     if is_compute_node:
         plan2.extend(
             [
-                TerraformInitStep(manifest_obj.get_tfhelper("hypervisor-plan")),
-                DeployHypervisorApplicationStep(
-                    client, manifest_obj, jhelper, deployment.infrastructure_model
-                ),
                 AddHypervisorUnitsStep(
                     client, name, jhelper, deployment.infrastructure_model
                 ),
@@ -685,6 +725,8 @@ def remove(ctx: click.Context, name: str, force: bool) -> None:
     client = deployment.get_client()
     jhelper = JujuHelper(deployment.get_connected_controller())
 
+    k8s_provider = Snap().config.get("k8s.provider")
+
     preflight_checks = [DaemonGroupCheck()]
     run_preflight_checks(preflight_checks, console)
 
@@ -693,17 +735,34 @@ def remove(ctx: click.Context, name: str, force: bool) -> None:
         RemoveSunbeamMachineStep(
             client, name, jhelper, deployment.infrastructure_model
         ),
-        RemoveMicrok8sUnitStep(client, name, jhelper, deployment.infrastructure_model),
-        RemoveMicrocephUnitStep(client, name, jhelper, deployment.infrastructure_model),
-        RemoveHypervisorUnitStep(
-            client, name, jhelper, deployment.infrastructure_model, force
-        ),
-        RemoveJujuMachineStep(client, name),
-        # Cannot remove user as the same user name cannot be resued,
-        # so commenting the RemoveJujuUserStep
-        # RemoveJujuUserStep(name),
-        ClusterRemoveNodeStep(client, name),
     ]
+
+    if k8s_provider == "k8s":
+        plan.append(
+            RemoveK8SUnitStep(client, name, jhelper, deployment.infrastructure_model)
+        )
+    else:
+        plan.append(
+            RemoveMicrok8sUnitStep(
+                client, name, jhelper, deployment.infrastructure_model
+            )
+        )
+
+    plan.extend(
+        [
+            RemoveMicrocephUnitStep(
+                client, name, jhelper, deployment.infrastructure_model
+            ),
+            RemoveHypervisorUnitStep(
+                client, name, jhelper, deployment.infrastructure_model, force
+            ),
+            RemoveJujuMachineStep(client, name),
+            # Cannot remove user as the same user name cannot be resued,
+            # so commenting the RemoveJujuUserStep
+            # RemoveJujuUserStep(name),
+            ClusterRemoveNodeStep(client, name),
+        ]
+    )
     run_plan(plan, console)
     click.echo(f"Removed node {name} from the cluster")
     # Removing machine does not clean up all deployed juju components. This is
@@ -721,6 +780,7 @@ def remove(ctx: click.Context, name: str, force: bool) -> None:
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
@@ -734,7 +794,7 @@ def remove(ctx: click.Context, name: str, force: bool) -> None:
 def configure_cmd(
     ctx: click.Context,
     openrc: Path | None = None,
-    manifest: Path | None = None,
+    manifest_path: Path | None = None,
     accept_defaults: bool = False,
 ) -> None:
     deployment: Deployment = ctx.obj
@@ -745,23 +805,11 @@ def configure_cmd(
     run_preflight_checks(preflight_checks, console)
 
     # Validate manifest file
-    manifest_obj = None
-    if manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-    else:
-        manifest_obj = Manifest.load_latest_from_clusterdb(
-            deployment, include_defaults=True
-        )
+    manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(
-        f"Manifest used for deployment - preseed: {manifest_obj.deployment_config}"
-    )
-    LOG.debug(
-        f"Manifest used for deployment - software: {manifest_obj.software_config}"
-    )
-    preseed = manifest_obj.deployment_config or {}
+    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment}")
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
+    preseed = manifest.deployment
 
     name = utils.get_fqdn()
     jhelper = JujuHelper(deployment.get_connected_controller())
@@ -775,7 +823,7 @@ def configure_cmd(
     admin_credentials["OS_INSECURE"] = "true"
 
     tfplan = "demo-setup"
-    tfhelper = manifest_obj.get_tfhelper(tfplan)
+    tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     answer_file = tfhelper.path / "config.auto.tfvars.json"
     plan = [

@@ -27,11 +27,10 @@ from sunbeam.clusterd.service import (
     ClusterServiceUnavailableException,
     ManifestItemNotFoundException,
 )
-from sunbeam.jobs.checks import DaemonGroupCheck, VerifyBootstrappedCheck
+from sunbeam.jobs.checks import DaemonGroupCheck
 from sunbeam.jobs.common import FORMAT_TABLE, FORMAT_YAML, run_preflight_checks
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.manifest import Manifest
-from sunbeam.utils import asdict_with_extra_fields
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -43,13 +42,13 @@ def generate_software_manifest(manifest: Manifest) -> str:
     comment = "# "
 
     try:
-        software_dict = asdict_with_extra_fields(manifest.software_config)
+        software_dict = manifest.software.model_dump()
         LOG.debug(f"Manifest software dict with extra fields: {software_dict}")
 
         # Remove terraform default sources
         manifest_terraform_dict = software_dict.get("terraform", {})
-        for name, value in manifest_terraform_dict.items():
-            if value.get("source") and value.get("source").startswith(
+        for _, value in manifest_terraform_dict.items():
+            if (source := value.get("source")) and str(source).startswith(
                 "/snap/openstack"
             ):
                 value["source"] = None
@@ -152,25 +151,19 @@ def generate(
     deployment: Deployment = ctx.obj
 
     if not manifest_file:
-        home = os.environ.get("SNAP_REAL_HOME")
+        home = os.environ["SNAP_REAL_HOME"]
         manifest_file = Path(home) / ".config" / "openstack" / "manifest.yaml"
 
     LOG.debug(f"Creating {manifest_file} parent directory if it does not exist")
     manifest_file.parent.mkdir(mode=0o775, parents=True, exist_ok=True)
 
-    try:
-        client = deployment.get_client()
-        preflight_checks = [DaemonGroupCheck(), VerifyBootstrappedCheck(client)]
-        run_preflight_checks(preflight_checks, console)
-        manifest_obj = Manifest.load_latest_from_clusterdb(
-            deployment, include_defaults=True
-        )
-    except (click.ClickException, ClusterServiceUnavailableException, ValueError):
-        LOG.debug("Fallback to generating manifest with defaults", exc_info=True)
-        manifest_obj = Manifest.get_default_manifest(deployment)
+    preflight_checks = [DaemonGroupCheck()]
+    run_preflight_checks(preflight_checks, console)
+
+    manifest = deployment.get_manifest()
 
     preseed_content = deployment.generate_preseed(console)
-    software_content = generate_software_manifest(manifest_obj)
+    software_content = generate_software_manifest(manifest)
 
     try:
         with manifest_file.open("w") as file:

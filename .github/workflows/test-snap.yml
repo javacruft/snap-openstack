@@ -1,0 +1,132 @@
+name: Test snap from the store
+
+on:
+  workflow_dispatch:
+    inputs:
+      snap-channel:
+        description: Specify openstack snap channel
+        required: true
+        default: 2024.1/candidate
+        type: string
+      os-charm-channel:
+        description: Specify openstack charms channel
+        required: true
+        default: 2024.1/candidate
+        type: string
+      ovn-charm-channel:
+        description: Specify ovn charms channel
+        required: true
+        default: 24.03/candidate
+        type: string
+      microceph-charm-channel:
+        description: Specify microceph charms channel
+        required: true
+        default: reef/candidate
+        type: string
+      rabbitmq-charm-channel:
+        description: Specify rabbitmq charms channel
+        required: true
+        default: 3.12/candidate
+        type: string
+      mysql-charm-channel:
+        description: Specify mysql charms channel
+        required: true
+        default: 8.0/candidate
+        type: string
+      mysql-router-charm-channel:
+        description: Specify mysql-router charms channel
+        required: true
+        default: 8.0/candidate
+        type: string
+      multi-mysql:
+        description: Specify if multi-mysql is enabled
+        required: true
+        default: single
+        type: choice
+        options:
+          - single
+          - multi
+      
+jobs:
+  functional-test:
+    name: Functional test
+    runs-on: [self-hosted, large, jammy, x64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: test
+        run: |
+          export COLUMNS=256
+          set +x
+          sudo snap install openstack --channel ${{ inputs.snap-channel }}
+          cp .github/assets/testing/manifest.yml .
+          sed -i 's|OS_CHARM|${{ inputs.os-charm-channel }}|' manifest.yml
+          sed -i 's|OVN_CHARM|${{ inputs.ovn-charm-channel }}|' manifest.yml
+          sed -i 's|MICROCEPH_CHARM|${{ inputs.microceph-charm-channel }}|' manifest.yml
+          sed -i 's|RABBITMQ_CHARM|${{ inputs.rabbitmq-charm-channel }}|' manifest.yml
+          sed -i 's|MYSQL_CHARM|${{ inputs.mysql-charm-channel }}|' manifest.yml
+          sed -i 's|MYSQL_ROUTER_CHARM|${{ inputs.mysql-router-charm-channel }}|' manifest.yml
+          echo "Manifest used:"
+          cat manifest.yml
+          sunbeam prepare-node-script | bash -x
+          sg snap_daemon "sunbeam cluster bootstrap --manifest ./manifest.yml --accept-defaults --topology single --database ${{ inputs.multi-mysql }}"
+          sg snap_daemon "sunbeam cluster list"
+          # Note: Moving configure before enabling caas just to ensure caas images are not downloaded
+          # To download caas image, require ports to open on firewall to access fedora images.
+          sg snap_daemon "sunbeam configure -a"
+          sg snap_daemon "sunbeam launch"
+          sg snap_daemon "sunbeam enable orchestration"
+          sg snap_daemon "sunbeam enable loadbalancer"
+          sg snap_daemon "sunbeam enable dns --nameservers=testing.github."
+          sg snap_daemon "sunbeam enable telemetry"
+          sg snap_daemon "sunbeam enable observability"
+          sg snap_daemon "sunbeam enable vault"
+          sg snap_daemon "sunbeam enable secrets"
+          sg snap_daemon "sunbeam enable caas"
+          # disable images-sync, not in 2023.2
+          # sg snap_daemon "sunbeam enable images-sync"
+          # sg snap_daemon "sunbeam enable validation"
+          # If smoke tests fails, logs should be collected via sunbeam command in "Collect logs"
+          # sg snap_daemon "sunbeam validation run smoke"
+          # sg snap_daemon "sunbeam validation run --output tempest_validation.log"
+          # sg snap_daemon "sunbeam disable images-sync"
+          sg snap_daemon "sunbeam disable caas"
+          sg snap_daemon "sunbeam disable secrets"
+          sg snap_daemon "sunbeam disable vault"
+          # Commented disabling observability due to LP#1998282
+          # sg snap_daemon "sunbeam disable observability"
+          # sg snap_daemon "sunbeam disable telemetry"
+          sg snap_daemon "sunbeam disable dns"
+          sg snap_daemon "sunbeam disable loadbalancer"
+          sg snap_daemon "sunbeam disable orchestration"
+          # sg snap_daemon "sunbeam disable validation"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p logs
+          kubectl="microk8s.kubectl"
+          cp -rf $HOME/snap/openstack/common/logs/*.log logs/
+          models=$(juju models --format json | jq -r .models[].name)
+          for model in $models;
+          do
+            name=$(echo $model | cut -d/ -f2);
+            juju status -m $model -o logs/$name.yaml;
+            cat logs/$name.yaml;
+            juju debug-log -m $model --replay &> logs/$name-debug-log.txt || echo "Not able to get logs for model $model"
+            for pod in $(sudo $kubectl get pods -n $name -o=jsonpath='{.items[*].metadata.name}');
+            do
+              sudo $kubectl logs --ignore-errors -n $name --all-containers $pod &> logs/$pod.log || echo "Not able to get log for $pod"
+            done
+          done
+          # if test -f tempest_validation.log; then cp tempest_validation.log logs/; fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sunbeam_logs
+          path: logs
+          retention-days: 30
+      - name: Setup tmate session
+        if: ${{ failure() && runner.debug }}
+        uses: canonical/action-tmate@main

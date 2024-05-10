@@ -37,8 +37,8 @@ from sunbeam.provider.maas.steps import (
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
     MaasConfigureMicrocephOSDStep,
+    MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
-    MaasDeployMicrok8sApplicationStep,
     MaasScaleJujuStep,
     MachineComputeNicCheck,
     MachineNetworkCheck,
@@ -1100,24 +1100,10 @@ class TestMaasConfigureMicrocephOSDStep:
         assert result.message == "Unit not found"
 
 
-class TestMaasDeployMicrok8sApplicationStep:
-    def test_extra_tfvars_with_ranges_none(self):
-        step = MaasDeployMicrok8sApplicationStep(
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-            "public_space",
-            "public_api",
-            "internal_space",
-            "internal_api",
-            "test-model",
-        )
-        with pytest.raises(ValueError):
-            step.extra_tfvars()
-
+class TestMaasDeployK8SApplicationStep:
     def test_extra_tfvars_with_ranges(self):
-        step = MaasDeployMicrok8sApplicationStep(
+        step = MaasDeployK8SApplicationStep(
+            MagicMock(),
             MagicMock(),
             MagicMock(),
             MagicMock(),
@@ -1128,14 +1114,8 @@ class TestMaasDeployMicrok8sApplicationStep:
             "internal_api",
             "test-model",
         )
-        step.ranges = "10.0.0.1-10.0.0.10,10.0.0.20-10.0.0.30"
-        expected_tfvars = {
-            "addons": {
-                "dns": "",
-                "hostpath-storage": "",
-                "metallb": "10.0.0.1-10.0.0.10,10.0.0.20-10.0.0.30",
-            }
-        }
+        step.ranges = "10.0.0.0/28"
+        expected_tfvars = {}
         assert step.extra_tfvars() == expected_tfvars
 
     def test_is_skip_with_public_ranges_error(self, mocker):
@@ -1143,7 +1123,8 @@ class TestMaasDeployMicrok8sApplicationStep:
             "sunbeam.provider.maas.client.get_ip_ranges_from_space",
             side_effect=ValueError("Failed to get ip ranges"),
         )
-        step = MaasDeployMicrok8sApplicationStep(
+        step = MaasDeployK8SApplicationStep(
+            MagicMock(),
             MagicMock(),
             MagicMock(),
             MagicMock(),
@@ -1163,7 +1144,8 @@ class TestMaasDeployMicrok8sApplicationStep:
             "sunbeam.provider.maas.client.get_ip_ranges_from_space",
             return_value={},
         )
-        step = MaasDeployMicrok8sApplicationStep(
+        step = MaasDeployK8SApplicationStep(
+            MagicMock(),
             MagicMock(),
             MagicMock(),
             MagicMock(),
@@ -1194,7 +1176,8 @@ class TestMaasDeployMicrok8sApplicationStep:
                 ValueError("Failed to get ip ranges"),
             ],
         )
-        step = MaasDeployMicrok8sApplicationStep(
+        step = MaasDeployK8SApplicationStep(
+            MagicMock(),
             MagicMock(),
             MagicMock(),
             MagicMock(),
@@ -1225,7 +1208,8 @@ class TestMaasDeployMicrok8sApplicationStep:
                 {},
             ],
         )
-        step = MaasDeployMicrok8sApplicationStep(
+        step = MaasDeployK8SApplicationStep(
+            MagicMock(),
             MagicMock(),
             MagicMock(),
             MagicMock(),

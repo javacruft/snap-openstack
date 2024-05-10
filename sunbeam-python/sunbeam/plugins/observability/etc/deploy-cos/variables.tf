@@ -22,7 +22,7 @@ variable "model" {
 
 variable "cloud" {
   description = "Name of K8S cloud to use for deployment"
-  default     = "microk8s"
+  default     = "k8s"
 }
 
 # https://github.com/juju/terraform-provider-juju/issues/147

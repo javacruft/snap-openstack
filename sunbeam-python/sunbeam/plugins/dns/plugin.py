@@ -26,7 +26,7 @@ from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, run_sync
-from sunbeam.jobs.manifest import AddManifestStep
+from sunbeam.jobs.manifest import AddManifestStep, CharmManifest, SoftwareConfig
 from sunbeam.plugins.interface.v1.openstack import (
     ApplicationChannelData,
     EnableOpenStackApplicationStep,
@@ -55,14 +55,14 @@ class DnsPlugin(OpenStackControlPlanePlugin):
         )
         self.nameservers = None
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {
-            "charms": {
-                "designate-k8s": {"channel": OPENSTACK_CHANNEL},
-                "designate-bind-k8s": {"channel": BIND_CHANNEL},
+    def manifest_defaults(self) -> SoftwareConfig:
+        """Plugin software configuration"""
+        return SoftwareConfig(
+            charms={
+                "designate-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
+                "designate-bind-k8s": CharmManifest(channel=BIND_CHANNEL),
             }
-        }
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attributes terraformvars map."""
@@ -92,10 +92,11 @@ class DnsPlugin(OpenStackControlPlanePlugin):
             plan.append(
                 AddManifestStep(self.deployment.get_client(), self.user_manifest)
             )
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
         plan.extend(
             [
-                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-                EnableOpenStackApplicationStep(jhelper, self),
+                TerraformInitStep(tfhelper),
+                EnableOpenStackApplicationStep(tfhelper, jhelper, self),
                 PatchBindLoadBalancerStep(self.deployment.get_client()),
             ]
         )

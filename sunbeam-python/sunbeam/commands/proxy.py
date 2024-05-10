@@ -38,14 +38,12 @@ from sunbeam.jobs.common import (
     ResultType,
     Status,
     convert_proxy_to_model_configs,
-    get_proxy_settings,
     run_plan,
     run_preflight_checks,
     update_config,
 )
 from sunbeam.jobs.deployment import PROXY_CONFIG_KEY, Deployment
 from sunbeam.jobs.juju import CONTROLLER_MODEL, JujuHelper
-from sunbeam.jobs.manifest import Manifest
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.jobs.questions import (
     ConfirmQuestion,
@@ -88,18 +86,17 @@ def _update_proxy(proxy: dict, deployment: Deployment):
     update_config(client, PROXY_CONFIG_KEY, proxy)
 
     jhelper = JujuHelper(deployment.get_connected_controller())
-    manifest_obj = Manifest.load_latest_from_clusterdb(
-        deployment, include_defaults=True
-    )
-    proxy_settings = get_proxy_settings(deployment)
+    manifest = deployment.get_manifest()
+    proxy_settings = deployment.get_proxy_settings()
     model_config = convert_proxy_to_model_configs(proxy_settings)
 
     plan = []
     plan.append(
         DeploySunbeamMachineApplicationStep(
             client,
-            manifest_obj,
+            deployment.get_tfhelper("sunbeam-machine-plan"),
             jhelper,
+            manifest,
             deployment.infrastructure_model,
             refresh=True,
             proxy_settings=proxy_settings,
@@ -117,8 +114,13 @@ def _update_proxy(proxy: dict, deployment: Deployment):
             )
         )
     else:
-        plan.append(TerraformInitStep(manifest_obj.get_tfhelper("openstack-plan")))
-        plan.append(UpdateOpenStackModelConfigStep(client, manifest_obj, model_config))
+        openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+        plan.append(TerraformInitStep(openstack_tfhelper))
+        plan.append(
+            UpdateOpenStackModelConfigStep(
+                client, openstack_tfhelper, manifest, model_config
+            )
+        )
     run_plan(plan, console)
 
     PluginManager.update_proxy_model_configs(deployment)
@@ -138,7 +140,7 @@ def show(ctx: click.Context, format: str) -> None:
     deployment: Deployment = ctx.obj
     _preflight_checks(deployment)
 
-    proxy = get_proxy_settings(deployment)
+    proxy = deployment.get_proxy_settings()
     if format == FORMAT_TABLE:
         table = Table(
             Column("Proxy Variable"),
@@ -198,20 +200,29 @@ def clear(ctx: click.Context) -> None:
         return
 
 
+def does_not_contain_quotes(answer: str):
+    """Check if the answer does not contain quotes."""
+    if '"' in answer or "'" in answer:
+        raise ValueError("Answer cannot contain quotes (\" or ').")
+
+
 def proxy_questions():
     return {
         "proxy_required": ConfirmQuestion(
-            "Configure proxy for access to external network resources?",
+            "Use proxy to access external network resources?",
             default_value=False,
         ),
         "http_proxy": PromptQuestion(
             "Enter value for http_proxy:",
+            validation_function=does_not_contain_quotes,
         ),
         "https_proxy": PromptQuestion(
             "Enter value for https_proxy:",
+            validation_function=does_not_contain_quotes,
         ),
         "no_proxy": PromptQuestion(
             "Enter value for no_proxy:",
+            validation_function=does_not_contain_quotes,
         ),
     }
 

@@ -24,7 +24,7 @@ from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
-from sunbeam.jobs.manifest import AddManifestStep
+from sunbeam.jobs.manifest import AddManifestStep, CharmManifest, SoftwareConfig
 from sunbeam.plugins.interface.v1.openstack import (
     DisableOpenStackApplicationStep,
     EnableOpenStackApplicationStep,
@@ -47,16 +47,16 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {
-            "charms": {
-                "aodh-k8s": {"channel": OPENSTACK_CHANNEL},
-                "gnocchi-k8s": {"channel": OPENSTACK_CHANNEL},
-                "ceilometer-k8s": {"channel": OPENSTACK_CHANNEL},
-                "openstack-exporter-k8s": {"channel": OPENSTACK_CHANNEL},
+    def manifest_defaults(self) -> SoftwareConfig:
+        """Plugin software configuration"""
+        return SoftwareConfig(
+            charms={
+                "aodh-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
+                "gnocchi-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
+                "ceilometer-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
+                "openstack-exporter-k8s": CharmManifest(channel=OPENSTACK_CHANNEL),
             }
-        }
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attributes terraformvars map."""
@@ -89,8 +89,9 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
 
     def run_enable_plans(self) -> None:
         """Run plans to enable plugin."""
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
+        tfhelper_hypervisor = self.deployment.get_tfhelper("hypervisor-plan")
         jhelper = JujuHelper(self.deployment.get_connected_controller())
-
         plan = []
         if self.user_manifest:
             plan.append(
@@ -98,13 +99,14 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
             )
         plan.extend(
             [
-                TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-                EnableOpenStackApplicationStep(jhelper, self),
+                TerraformInitStep(tfhelper),
+                EnableOpenStackApplicationStep(tfhelper, jhelper, self),
                 # No need to pass any extra terraform vars for this plugin
                 ReapplyHypervisorTerraformPlanStep(
                     self.deployment.get_client(),
-                    self.manifest,
+                    tfhelper_hypervisor,
                     jhelper,
+                    self.manifest,
                     self.deployment.infrastructure_model,
                 ),
             ]
@@ -115,14 +117,17 @@ class TelemetryPlugin(OpenStackControlPlanePlugin):
 
     def run_disable_plans(self) -> None:
         """Run plans to disable the plugin."""
+        tfhelper = self.deployment.get_tfhelper(self.tfplan)
+        tfhelper_hypervisor = self.deployment.get_tfhelper("hypervisor-plan")
         jhelper = JujuHelper(self.deployment.get_connected_controller())
         plan = [
-            TerraformInitStep(self.manifest.get_tfhelper(self.tfplan)),
-            DisableOpenStackApplicationStep(jhelper, self),
+            TerraformInitStep(tfhelper),
+            DisableOpenStackApplicationStep(tfhelper, jhelper, self),
             ReapplyHypervisorTerraformPlanStep(
                 self.deployment.get_client(),
-                self.manifest,
+                tfhelper_hypervisor,
                 jhelper,
+                self.manifest,
                 self.deployment.infrastructure_model,
             ),
         ]

@@ -52,7 +52,7 @@ dpkg -s openssh-server &> /dev/null || {{
 
 # Add $USER to the snap_daemon group supporting interaction
 # with the sunbeam clustering daemon for cluster operations.
-sudo addgroup $USER snap_daemon
+sudo usermod --append --groups snap_daemon $USER
 
 # Generate keypair and set-up prompt-less access to local machine
 [ -f $HOME/.ssh/id_rsa ] || ssh-keygen -b 4096 -f $HOME/.ssh/id_rsa -t rsa -N ""
@@ -82,6 +82,30 @@ sudo snap install --channel {JUJU_CHANNEL} juju
 # Workaround a bug between snapd and juju
 mkdir -p $HOME/.local/share
 mkdir -p $HOME/.config/openstack
+
+# Check the snap channel and deduce risk level from it
+snap_output=$(snap list openstack --unicode=never --color=never | grep openstack)
+track=$(awk -v col=4 '{{print $col}}' <<<"$snap_output")
+
+# if never installed from the store, the channel is "-"
+if [[ $track =~ "edge" ]] || [[ $track == "-" ]]; then
+    risk="edge"
+elif [[ $track =~ "beta" ]]; then
+    risk="beta"
+elif [[ $track =~ "candidate" ]]; then
+    risk="candidate"
+else
+    risk="stable"
+fi
+
+if [[ $risk != "stable" ]]; then
+    echo "You're deploying from $risk channel," \
+        " to test $risk charms, you must provide the $risk manifest."
+    sudo snap set openstack deployment.risk=$risk
+    echo "Snap has been automatically configured to deploy from" \
+        "$risk channel."
+    echo "Override by passing a custom manifest with -m/--manifest."
+fi
 """
 
 

@@ -56,4 +56,3 @@ variable "addons" {
     metallb          = "10.20.21.1-10.20.21.10"
   }
 }
-

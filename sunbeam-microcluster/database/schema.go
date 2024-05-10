@@ -10,12 +10,12 @@ import (
 
 // SchemaExtensions is a list of schema extensions that can be passed to the MicroCluster daemon.
 // Each entry will increase the database schema version by one, and will be applied after internal schema updates.
-var SchemaExtensions = map[int]schema.Update{
-	1: NodesSchemaUpdate,
-	2: ConfigSchemaUpdate,
-	3: JujuUserSchemaUpdate,
-	4: ManifestsSchemaUpdate,
-	5: AddSystemIDToNodes,
+var SchemaExtensions = []schema.Update{
+	NodesSchemaUpdate,
+	ConfigSchemaUpdate,
+	JujuUserSchemaUpdate,
+	ManifestsSchemaUpdate,
+	AddSystemIDToNodes,
 }
 
 // NodesSchemaUpdate is schema for table nodes

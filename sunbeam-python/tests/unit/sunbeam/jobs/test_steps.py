@@ -22,7 +22,6 @@ from sunbeam.clusterd.service import NodeNotExistInClusterException
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
 from sunbeam.jobs.juju import ApplicationNotFoundException, TimeoutException
-from sunbeam.jobs.manifest import Manifest
 from sunbeam.jobs.steps import (
     AddMachineUnitsStep,
     DeployMachineApplicationStep,
@@ -51,6 +50,11 @@ def cclient():
 
 
 @pytest.fixture()
+def tfhelper():
+    yield Mock()
+
+
+@pytest.fixture()
 def jhelper():
     yield AsyncMock()
 
@@ -63,40 +67,53 @@ def read_config():
 
 @pytest.fixture()
 def manifest():
-    with patch.object(Manifest, "load_latest_from_clusterdb_on_default") as p:
-        yield p
+    yield Mock()
 
 
 class TestDeployMachineApplicationStep:
-    def test_is_skip(self, cclient, jhelper, manifest):
+    def test_is_skip(self, cclient, tfhelper, jhelper, manifest):
         jhelper.get_application.side_effect = ApplicationNotFoundException("not found")
 
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, "tfconfig", "app1", "model1", "fake-plan"
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            "tfconfig",
+            "app1",
+            "model1",
         )
         result = step.is_skip()
 
         jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_is_skip_application_already_deployed(self, cclient, jhelper, manifest):
+    def test_is_skip_application_already_deployed(
+        self, cclient, tfhelper, jhelper, manifest
+    ):
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, "tfconfig", "app1", "model1", "fake-plan"
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            "tfconfig",
+            "app1",
+            "model1",
         )
         result = step.is_skip()
 
         jhelper.get_application.assert_called_once()
         assert result.result_type == ResultType.SKIPPED
 
-    def test_is_skip_application_refresh(self, cclient, jhelper, manifest):
+    def test_is_skip_application_refresh(self, cclient, tfhelper, jhelper, manifest):
         step = DeployMachineApplicationStep(
             cclient,
-            manifest,
+            tfhelper,
             jhelper,
+            manifest,
             "tfconfig",
             "app1",
             "model1",
-            "fake-plan",
             refresh=True,
         )
         result = step.is_skip()
@@ -104,59 +121,77 @@ class TestDeployMachineApplicationStep:
         jhelper.get_application.assert_not_called()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_pristine_installation(self, cclient, jhelper, manifest):
+    def test_run_pristine_installation(self, cclient, tfhelper, jhelper, manifest):
         jhelper.get_application.side_effect = ApplicationNotFoundException("not found")
 
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, "tfconfig", "app1", "model1", "fake-plan"
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            "tfconfig",
+            "app1",
+            "model1",
         )
         result = step.run()
 
         jhelper.get_application.assert_called_once()
-        manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_already_deployed(self, cclient, jhelper, manifest):
+    def test_run_already_deployed(self, cclient, tfhelper, jhelper, manifest):
         tfconfig = "tfconfig"
-        tfplan = "fake-plan"
         machines = ["1", "2"]
         model = "model1"
         application = Mock(units=[Mock(machine=Mock(id=m)) for m in machines])
         jhelper.get_application.return_value = application
 
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, tfconfig, "app1", model, tfplan
+            cclient, tfhelper, jhelper, manifest, tfconfig, "app1", model
         )
         result = step.run()
 
         jhelper.get_application.assert_called_once()
-        manifest.update_tfvars_and_apply_tf.assert_called_with(
+        tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             cclient,
-            tfplan=tfplan,
+            manifest,
             tfvar_config=tfconfig,
             override_tfvars={"machine_ids": machines, "machine_model": model},
         )
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, cclient, jhelper, manifest):
-        manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+    def test_run_tf_apply_failed(self, cclient, tfhelper, jhelper, manifest):
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, "tfconfig", "app1", "model1", "fake-plan"
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            "tfconfig",
+            "app1",
+            "model1",
         )
         result = step.run()
 
-        manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(self, cclient, jhelper, manifest):
+    def test_run_waiting_timed_out(self, cclient, tfhelper, jhelper, manifest):
         jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
         step = DeployMachineApplicationStep(
-            cclient, manifest, jhelper, "tfconfig", "app1", "model1", "fake-plan"
+            cclient,
+            tfhelper,
+            jhelper,
+            manifest,
+            "tfconfig",
+            "app1",
+            "model1",
+            "fake-plan",
         )
         result = step.run()
 

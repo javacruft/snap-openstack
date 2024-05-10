@@ -45,48 +45,32 @@ def mock_run_sync(mocker):
 class TestEnableUbuntuProApplicationStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
+        self.tfhelper = Mock()
         self.jhelper = AsyncMock()
         self.manifest = Mock()
-        self.tfplan = "fake-plan"
         self.model = "test-model"
         self.token = "TOKENFORTESTING"
-
-    def test_is_skip(self):
-        step = EnableUbuntuProApplicationStep(
+        self.step = EnableUbuntuProApplicationStep(
             self.client,
-            self.manifest,
+            self.tfhelper,
             self.jhelper,
+            self.manifest,
             self.token,
-            self.tfplan,
             self.model,
         )
-        result = step.is_skip()
+
+    def test_is_skip(self):
+        result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
-        step = EnableUbuntuProApplicationStep(
-            self.client,
-            self.manifest,
-            self.jhelper,
-            self.token,
-            self.tfplan,
-            self.model,
-        )
-        assert not step.has_prompts()
+        assert not self.step.has_prompts()
 
     def test_enable(self):
-        step = EnableUbuntuProApplicationStep(
+        result = self.step.run()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             self.client,
             self.manifest,
-            self.jhelper,
-            self.token,
-            self.tfplan,
-            self.model,
-        )
-        result = step.run()
-        self.manifest.update_tfvars_and_apply_tf.assert_called_with(
-            self.client,
-            tfplan=self.tfplan,
             tfvar_config=None,
             override_tfvars={"token": self.token},
         )
@@ -94,36 +78,20 @@ class TestEnableUbuntuProApplicationStep(unittest.TestCase):
         assert result.result_type == ResultType.COMPLETED
 
     def test_enable_tf_apply_failed(self):
-        self.manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+        self.tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        step = EnableUbuntuProApplicationStep(
-            self.client,
-            self.manifest,
-            self.jhelper,
-            self.token,
-            self.tfplan,
-            self.model,
-        )
-        result = step.run()
+        result = self.step.run()
 
-        self.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
     def test_enable_waiting_timed_out(self):
         self.jhelper.wait_application_ready.side_effect = TimeoutException("timed out")
 
-        step = EnableUbuntuProApplicationStep(
-            self.client,
-            self.manifest,
-            self.jhelper,
-            self.token,
-            self.tfplan,
-            self.model,
-        )
-        result = step.run()
+        result = self.step.run()
 
         self.jhelper.wait_application_ready.assert_called_once()
         assert result.result_type == ResultType.FAILED
@@ -133,38 +101,37 @@ class TestEnableUbuntuProApplicationStep(unittest.TestCase):
 class TestDisableUbuntuProApplicationStep(unittest.TestCase):
     def setUp(self):
         self.client = Mock()
+        self.tfhelper = Mock()
         self.jhelper = AsyncMock()
         self.manifest = Mock()
-        self.tfplan = "fake-plan"
+        self.step = DisableUbuntuProApplicationStep(
+            self.client, self.tfhelper, self.manifest
+        )
 
     def test_is_skip(self):
-        step = DisableUbuntuProApplicationStep(self.client, self.manifest, self.tfplan)
-        result = step.is_skip()
+        result = self.step.is_skip()
         assert result.result_type == ResultType.COMPLETED
 
     def test_has_prompts(self):
-        step = DisableUbuntuProApplicationStep(self.client, self.manifest, self.tfplan)
-        assert not step.has_prompts()
+        assert not self.step.has_prompts()
 
     def test_disable(self):
-        step = DisableUbuntuProApplicationStep(self.client, self.manifest, self.tfplan)
-        result = step.run()
-        self.manifest.update_tfvars_and_apply_tf.assert_called_with(
+        result = self.step.run()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_with(
             self.client,
-            tfplan=self.tfplan,
+            self.manifest,
             tfvar_config=None,
             override_tfvars={"token": ""},
         )
         assert result.result_type == ResultType.COMPLETED
 
     def test_disable_tf_apply_failed(self):
-        self.manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+        self.tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        step = DisableUbuntuProApplicationStep(self.client, self.manifest, self.tfplan)
-        result = step.run()
+        result = self.step.run()
 
-        self.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        self.tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."

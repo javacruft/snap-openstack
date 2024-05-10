@@ -17,20 +17,21 @@
 SUPPORTED_RELEASE = "jammy"
 JUJU_CHANNEL = "3.4/stable"
 JUJU_BASE = "ubuntu@22.04"
-OPENSTACK_CHANNEL = "2023.2/stable"
-OVN_CHANNEL = "23.09/stable"
+OPENSTACK_CHANNEL = "2024.1/stable"
+OVN_CHANNEL = "24.03/stable"
 RABBITMQ_CHANNEL = "3.12/stable"
 TRAEFIK_CHANNEL = "1.0/stable"
 MICROCEPH_CHANNEL = "reef/candidate"
-SUNBEAM_MACHINE_CHANNEL = "2023.2/stable"
-SUNBEAM_CLUSTERD_CHANNEL = "2023.2/stable"
-SNAP_SUNBEAM_CLUSTERD_CHANNEL = "2023.2/stable"
+SUNBEAM_MACHINE_CHANNEL = "2024.1/stable"
+SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
+SNAP_SUNBEAM_CLUSTERD_CHANNEL = "2024.1/stable"
 MICROK8S_CHANNEL = "legacy/stable"
 MYSQL_CHANNEL = "8.0/stable"
 CERT_AUTH_CHANNEL = "latest/beta"
 BIND_CHANNEL = "9/stable"
 VAULT_CHANNEL = "latest/edge"  # Pinned to a specific revision in TF plans
-TEMPEST_CHANNEL = "2023.2/stable"
+TEMPEST_CHANNEL = "2024.1/stable"
+K8S_CHANNEL = "latest/edge"
 
 # List of charms with default channels
 OPENSTACK_CHARMS_K8S = {
@@ -59,6 +60,7 @@ MISC_CHARMS_K8S = {
 MACHINE_CHARMS = {
     "microceph": MICROCEPH_CHANNEL,
     "microk8s": MICROK8S_CHANNEL,
+    "k8s": K8S_CHANNEL,
     "openstack-hypervisor": OPENSTACK_CHANNEL,
     "sunbeam-machine": SUNBEAM_MACHINE_CHANNEL,
     "sunbeam-clusterd": SUNBEAM_CLUSTERD_CHANNEL,
@@ -80,6 +82,7 @@ MANIFEST_CHARM_VERSIONS |= MACHINE_CHARMS
 TERRAFORM_DIR_NAMES = {
     "sunbeam-machine-plan": "deploy-sunbeam-machine",
     "microk8s-plan": "deploy-microk8s",
+    "k8s-plan": "deploy-k8s",
     "microceph-plan": "deploy-microceph",
     "openstack-plan": "deploy-openstack",
     "hypervisor-plan": "deploy-openstack-hypervisor",
@@ -119,12 +122,12 @@ Example:
             },
         },
     },
-    "microk8s-plan": {
+    "k8s-plan": {
         "charms": {
-            "microk8s": {
-                "channel": "charm_microk8s_channel",
-                "revision": "charm_microk8s_revision",
-                "config": "charm_microk8s_config",
+            "k8s": {
+                "channel": "k8s-channel",
+                "revision": "k8s-revision",
+                "config": "k8s-config",
             },
         },
     },
@@ -151,7 +154,6 @@ DEPLOY_OPENSTACK_TFVAR_MAP["charms"]["self-signed-certificates"] = {
     "revision": "certificate-authority-revision",
     "config": "certificate-authority-config",
 }
-
 DEPLOY_MICROK8S_TFVAR_MAP = {
     "charms": {
         "microk8s": {
@@ -159,6 +161,15 @@ DEPLOY_MICROK8S_TFVAR_MAP = {
             "revision": "charm_microk8s_revision",
             "config": "charm_microk8s_config",
         }
+    }
+}
+DEPLOY_K8S_TFVAR_MAP = {
+    "charms": {
+        "k8s": {
+            "channel": "k8s_channel",
+            "revision": "k8s_revision",
+            "config": "k8s_config",
+        },
     }
 }
 DEPLOY_MICROCEPH_TFVAR_MAP = {
@@ -193,6 +204,7 @@ DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP = {
 MANIFEST_ATTRIBUTES_TFVAR_MAP = {
     "sunbeam-machine-plan": DEPLOY_SUNBEAM_MACHINE_TFVAR_MAP,
     "microk8s-plan": DEPLOY_MICROK8S_TFVAR_MAP,
+    "k8s-plan": DEPLOY_K8S_TFVAR_MAP,
     "microceph-plan": DEPLOY_MICROCEPH_TFVAR_MAP,
     "openstack-plan": DEPLOY_OPENSTACK_TFVAR_MAP,
     "hypervisor-plan": DEPLOY_OPENSTACK_HYPERVISOR_TFVAR_MAP,

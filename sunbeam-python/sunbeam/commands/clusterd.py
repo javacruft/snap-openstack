@@ -50,7 +50,7 @@ from sunbeam.jobs.juju import (
     TimeoutException,
     run_sync,
 )
-from sunbeam.jobs.manifest import CharmsManifest, Manifest
+from sunbeam.jobs.manifest import CharmManifest, Manifest
 
 LOG = logging.getLogger(__name__)
 APPLICATION = "sunbeam-clusterd"
@@ -465,7 +465,7 @@ class DeploySunbeamClusterdApplicationStep(BaseStep):
 
         num_units = num_machines
         self.update_status(status, "deploying application")
-        charm_manifest: CharmsManifest = self.manifest.software_config.charms[
+        charm_manifest: CharmManifest = self.manifest.software.charms[
             "sunbeam-clusterd"
         ]
         charm_config = {"snap-channel": versions.SNAP_SUNBEAM_CLUSTERD_CHANNEL}

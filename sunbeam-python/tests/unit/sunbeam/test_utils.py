@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import copy
+
 import textwrap
 from dataclasses import InitVar
 from typing import Dict
@@ -273,27 +273,3 @@ class TestUtils:
         generate_password = mocker.patch("sunbeam.utils.generate_password")
         generate_password.return_value = "abcdefghijkl"
         assert utils.generate_password() == "abcdefghijkl"
-
-    def test_asdict_with_extra_fields_no_extra_fields(self):
-        b = {"b_str": "b", "b_dict": {}}
-        b_dc = B(**b)
-        a = {"a_int": 1, "a_str": "a", "a_dict": {}, "a_dict_b": {"b1": b_dc}}
-        a_dc = A("initvar", **a)
-        a_dict_with_extra = utils.asdict_with_extra_fields(a_dc)
-
-        a_dict_expected = copy.deepcopy(a)
-        a_dict_expected["a_dict_b"]["b1"] = b
-        assert a_dict_with_extra == a_dict_expected
-
-    def test_asdict_with_extra_fields_with_extra_fields(self):
-        b = {"b_str": "b", "b_dict": {}}
-        b_dc = B(**b)
-        a = {"a_int": 1, "a_str": "a", "a_dict": {}, "a_dict_b": {"b1": b_dc}}
-        a_dc = A("initvar", **a)
-        a_dc.a_extra = "a_extra"
-        a_dict_with_extra = utils.asdict_with_extra_fields(a_dc)
-
-        a_dict_expected = copy.deepcopy(a)
-        a_dict_expected["a_dict_b"]["b1"] = b
-        a_dict_expected["a_extra"] = "a_extra"
-        assert a_dict_with_extra == a_dict_expected

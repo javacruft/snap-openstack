@@ -26,15 +26,16 @@ from packaging.version import Version
 from snaphelpers import Snap
 
 from sunbeam.clusterd.service import ConfigItemNotFoundException
-from sunbeam.jobs.common import read_config, update_config
+from sunbeam.jobs.common import SunbeamException, read_config, update_config
 from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.manifest import SoftwareConfig
 from sunbeam.jobs.plugin import PluginManager
 from sunbeam.plugins.interface import utils
 
 LOG = logging.getLogger(__name__)
 
 
-class PluginError(Exception):
+class PluginError(SunbeamException):
     """Common plugin exception base class"""
 
 
@@ -192,7 +193,7 @@ class BasePlugin(ABC):
 
         return Version(version)
 
-    def manifest_defaults(self) -> dict:
+    def manifest_defaults(self) -> SoftwareConfig:
         """Return manifest part of the plugin.
 
         Define manifest charms involved and default values for charm attributes
@@ -215,7 +216,7 @@ class BasePlugin(ABC):
 
         The plugins that uses terraform plan should override this function.
         """
-        return {}
+        return SoftwareConfig()
 
     def add_manifest_section(self, manifest) -> None:
         """Add manifest section.

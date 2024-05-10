@@ -19,6 +19,7 @@ import click
 from packaging.version import Version
 
 from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.manifest import CharmManifest, SoftwareConfig
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
@@ -38,9 +39,11 @@ class OrchestrationPlugin(OpenStackControlPlanePlugin):
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
-    def manifest_defaults(self) -> dict:
-        """Manifest plugin part in dict format."""
-        return {"charms": {"heat-k8s": {"channel": OPENSTACK_CHANNEL}}}
+    def manifest_defaults(self) -> SoftwareConfig:
+        """Plugin software configuration"""
+        return SoftwareConfig(
+            charms={"heat-k8s": CharmManifest(channel=OPENSTACK_CHANNEL)}
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attributes terraformvars map."""

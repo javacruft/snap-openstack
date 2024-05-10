@@ -43,7 +43,6 @@ from sunbeam.jobs.common import (
 )
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
-from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -260,9 +259,6 @@ def cloud_config(
     preflight_checks = []
     preflight_checks.append(VerifyBootstrappedCheck(client))
     run_preflight_checks(preflight_checks, console)
-    manifest_obj = Manifest.load_latest_from_clusterdb(
-        deployment, include_defaults=True
-    )
     jhelper = JujuHelper(deployment.get_connected_controller())
     try:
         run_sync(jhelper.get_model(OPENSTACK_MODEL))
@@ -271,7 +267,7 @@ def cloud_config(
         raise click.ClickException("Please run `sunbeam cluster bootstrap` first")
     admin_credentials = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
     tfplan = "demo-setup"
-    tfhelper = manifest_obj.get_tfhelper(tfplan)
+    tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     plan = [
         GenerateCloudConfigStep(

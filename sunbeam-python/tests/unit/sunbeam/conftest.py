@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,23 +20,32 @@ from snaphelpers import Snap, SnapConfig, SnapServices
 
 
 @pytest.fixture
-def snap_env():
+def snap_env(tmp_path: Path, mocker):
     """Environment variables defined in the snap.
 
     This is primarily used to setup the snaphelpers bit.
     """
-    yield {
-        "SNAP": "/snap/mysnap/2",
-        "SNAP_COMMON": "/var/snap/mysnap/common",
-        "SNAP_DATA": "/var/snap/mysnap/2",
+    snap_name = "sunbeam-test"
+    real_home = tmp_path / "home/ubuntu"
+    snap_user_common = real_home / f"snap/{snap_name}/common"
+    snap_user_data = real_home / f"snap/{snap_name}/2"
+    snap_path = tmp_path / f"snap/2/{snap_name}"
+    snap_common = tmp_path / f"var/snap/{snap_name}/common"
+    snap_data = tmp_path / f"var/snap/{snap_name}/2"
+    env = {
+        "SNAP": str(snap_path),
+        "SNAP_COMMON": str(snap_common),
+        "SNAP_DATA": str(snap_data),
+        "SNAP_USER_COMMON": str(snap_user_common),
+        "SNAP_USER_DATA": str(snap_user_data),
+        "SNAP_REAL_HOME": str(real_home),
         "SNAP_INSTANCE_NAME": "",
-        "SNAP_NAME": "mysnap",
+        "SNAP_NAME": snap_name,
         "SNAP_REVISION": "2",
-        "SNAP_USER_COMMON": "/var/snap/mysnap/usercommon",
-        "SNAP_USER_DATA": "",
         "SNAP_VERSION": "1.2.3",
-        "SNAP_REAL_HOME": "/home/ubuntu",
     }
+    mocker.patch("os.environ", env)
+    yield env
 
 
 @pytest.fixture

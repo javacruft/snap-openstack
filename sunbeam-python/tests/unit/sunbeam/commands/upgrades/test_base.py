@@ -23,6 +23,7 @@ from sunbeam.jobs.juju import TimeoutException
 class TestBaseUpgrade:
     def setup_method(self):
         self.client = Mock()
+        self.tfhelper = Mock()
         self.jhelper = AsyncMock()
         self.manifest = Mock()
 
@@ -30,7 +31,6 @@ class TestBaseUpgrade:
         model = "openstack"
         apps = ["nova"]
         charms = ["nova-k8s"]
-        tfplan = "openstack-plan"
         config = "openstackterraformvar"
         timeout = 60
 
@@ -44,23 +44,22 @@ class TestBaseUpgrade:
         )
 
         result = upgrader.upgrade_applications(
-            apps, charms, model, tfplan, config, timeout
+            apps, charms, model, self.tfhelper, config, timeout
         )
-        self.manifest.update_partial_tfvars_and_apply_tf.assert_called_once_with(
-            self.client, charms, tfplan, config
+        self.tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once_with(
+            self.client, self.manifest, charms, config
         )
         self.jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
     def test_upgrade_applications_tf_failed(self):
-        self.manifest.update_partial_tfvars_and_apply_tf.side_effect = (
+        self.tfhelper.update_partial_tfvars_and_apply_tf.side_effect = (
             TerraformException("apply failed...")
         )
 
         model = "openstack"
         apps = ["nova"]
         charms = ["nova-k8s"]
-        tfplan = "openstack-plan"
         config = "openstackterraformvar"
         timeout = 60
 
@@ -74,10 +73,10 @@ class TestBaseUpgrade:
         )
 
         result = upgrader.upgrade_applications(
-            apps, charms, model, tfplan, config, timeout
+            apps, charms, model, self.tfhelper, config, timeout
         )
-        self.manifest.update_partial_tfvars_and_apply_tf.assert_called_once_with(
-            self.client, charms, tfplan, config
+        self.tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once_with(
+            self.client, self.manifest, charms, config
         )
         self.jhelper.wait_until_desired_status.assert_not_called()
         assert result.result_type == ResultType.FAILED
@@ -91,7 +90,6 @@ class TestBaseUpgrade:
         model = "openstack"
         apps = ["nova"]
         charms = ["nova-k8s"]
-        tfplan = "openstack-plan"
         config = "openstackterraformvar"
         timeout = 60
 
@@ -105,10 +103,10 @@ class TestBaseUpgrade:
         )
 
         result = upgrader.upgrade_applications(
-            apps, charms, model, tfplan, config, timeout
+            apps, charms, model, self.tfhelper, config, timeout
         )
-        self.manifest.update_partial_tfvars_and_apply_tf.assert_called_once_with(
-            self.client, charms, tfplan, config
+        self.tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once_with(
+            self.client, self.manifest, charms, config
         )
         self.jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED

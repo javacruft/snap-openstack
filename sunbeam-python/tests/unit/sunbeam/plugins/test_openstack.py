@@ -23,7 +23,6 @@ import sunbeam.plugins.interface.v1.openstack as openstack
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.common import ResultType
 from sunbeam.jobs.juju import TimeoutException
-from sunbeam.jobs.manifest import Manifest
 
 
 @pytest.fixture(autouse=True)
@@ -39,18 +38,6 @@ def mock_run_sync(mocker):
     mocker.patch("sunbeam.plugins.interface.v1.openstack.run_sync", run_sync)
     yield
     loop.close()
-
-
-@pytest.fixture()
-def cclient():
-    yield Mock()
-
-
-@pytest.fixture()
-def read_config():
-    with patch("sunbeam.plugins.interface.v1.openstack.read_config") as p:
-        p.return_value = {}
-        yield p
 
 
 @pytest.fixture()
@@ -73,78 +60,73 @@ def osplugin():
 
 @pytest.fixture()
 def manifest():
-    with patch.object(Manifest, "load_latest_from_clusterdb_on_default") as p:
-        yield p
-
-
-@pytest.fixture()
-def pluginmanager():
-    with patch("sunbeam.jobs.manifest.PluginManager") as p:
-        yield p
+    yield Mock()
 
 
 class TestEnableOpenStackApplicationStep:
-    def test_run(
-        self,
-        cclient,
-        jhelper,
-        osplugin,
-    ):
-        step = openstack.EnableOpenStackApplicationStep(jhelper, osplugin)
+    def test_run(self, tfhelper, jhelper, osplugin):
+        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(
-        self, cclient, read_config, jhelper, tfhelper, osplugin, manifest, pluginmanager
-    ):
-        osplugin.manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+    def test_run_tf_apply_failed(self, jhelper, tfhelper, osplugin):
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        step = openstack.EnableOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, read_config, jhelper, tfhelper, osplugin, manifest, pluginmanager
-    ):
+    def test_run_waiting_timed_out(self, jhelper, tfhelper, osplugin):
         jhelper.wait_until_active.side_effect = TimeoutException("timed out")
 
-        step = openstack.EnableOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.EnableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_active.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"
 
 
 class TestDisableOpenStackApplicationStep:
-    def test_run(self, cclient, jhelper, osplugin):
-        step = openstack.DisableOpenStackApplicationStep(jhelper, osplugin)
+    def test_run(self, tfhelper, jhelper, osplugin):
+        step = openstack.DisableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(self, cclient, jhelper, osplugin):
-        osplugin.manifest.update_tfvars_and_apply_tf.side_effect = TerraformException(
+    def test_run_tf_apply_failed(self, tfhelper, jhelper, osplugin):
+        tfhelper.update_tfvars_and_apply_tf.side_effect = TerraformException(
             "apply failed..."
         )
 
-        step = openstack.DisableOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.DisableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
+
+    def test_run_waiting_timed_out(self, tfhelper, jhelper, osplugin):
+        jhelper.wait_application_gone.side_effect = TimeoutException("timed out")
+
+        step = openstack.DisableOpenStackApplicationStep(tfhelper, jhelper, osplugin)
+        result = step.run()
+
+        tfhelper.update_tfvars_and_apply_tf.assert_called_once()
+        jhelper.wait_application_gone.assert_called_once()
+        assert result.result_type == ResultType.FAILED
+        assert result.message == "timed out"
 
 
 class MockStatus:
@@ -158,7 +140,7 @@ class MockStatus:
 class TestUpgradeOpenStackApplicationStep:
     def test_run(
         self,
-        cclient,
+        tfhelper,
         jhelper,
         osplugin,
     ):
@@ -172,18 +154,16 @@ class TestUpgradeOpenStackApplicationStep:
                 }
             }
         )
-        step = openstack.UpgradeOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.UpgradeOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_partial_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_tf_apply_failed(
-        self, cclient, read_config, jhelper, tfhelper, osplugin, manifest, pluginmanager
-    ):
-        osplugin.manifest.update_partial_tfvars_and_apply_tf.side_effect = (
-            TerraformException("apply failed...")
+    def test_run_tf_apply_failed(self, tfhelper, jhelper, osplugin):
+        tfhelper.update_partial_tfvars_and_apply_tf.side_effect = TerraformException(
+            "apply failed..."
         )
 
         jhelper.get_model_status_full.return_value = MockStatus(
@@ -196,17 +176,15 @@ class TestUpgradeOpenStackApplicationStep:
                 }
             }
         )
-        step = openstack.UpgradeOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.UpgradeOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_partial_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_not_called()
         assert result.result_type == ResultType.FAILED
         assert result.message == "apply failed..."
 
-    def test_run_waiting_timed_out(
-        self, cclient, read_config, jhelper, tfhelper, osplugin, manifest, pluginmanager
-    ):
+    def test_run_waiting_timed_out(self, tfhelper, jhelper, osplugin):
         jhelper.wait_until_desired_status.side_effect = TimeoutException("timed out")
 
         jhelper.get_model_status_full.return_value = MockStatus(
@@ -219,10 +197,10 @@ class TestUpgradeOpenStackApplicationStep:
                 }
             }
         )
-        step = openstack.UpgradeOpenStackApplicationStep(jhelper, osplugin)
+        step = openstack.UpgradeOpenStackApplicationStep(tfhelper, jhelper, osplugin)
         result = step.run()
 
-        osplugin.manifest.update_partial_tfvars_and_apply_tf.assert_called_once()
+        tfhelper.update_partial_tfvars_and_apply_tf.assert_called_once()
         jhelper.wait_until_desired_status.assert_called_once()
         assert result.result_type == ResultType.FAILED
         assert result.message == "timed out"

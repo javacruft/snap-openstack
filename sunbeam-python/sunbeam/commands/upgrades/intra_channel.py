@@ -21,6 +21,7 @@ from rich.status import Status
 
 from sunbeam.commands.hypervisor import ReapplyHypervisorTerraformPlanStep
 from sunbeam.commands.juju import JujuStepHelper
+from sunbeam.commands.k8s import DeployK8SApplicationStep
 from sunbeam.commands.microceph import DeployMicrocephApplicationStep
 from sunbeam.commands.microk8s import DeployMicrok8sApplicationStep
 from sunbeam.commands.openstack import ReapplyOpenStackTerraformPlanStep
@@ -53,20 +54,20 @@ class LatestInChannel(BaseStep, JujuStepHelper):
 
     def is_track_changed_for_any_charm(self, deployed_apps: dict):
         """Check if chanel track is same in manifest and deployed app."""
-        for app_name, (charm, channel, revision) in deployed_apps.items():
-            if not self.manifest.software_config.charms.get(charm):
+        for app_name, (charm, channel, _) in deployed_apps.items():
+            if not self.manifest.software.charms.get(charm):
                 LOG.debug(f"Charm not present in manifest: {charm}")
                 continue
 
             channel_from_manifest = (
-                self.manifest.software_config.charms.get(charm).channel or ""
+                self.manifest.software.charms.get(charm).channel or ""
             )
             track_from_manifest = channel_from_manifest.split("/")[0]
             track_from_deployed_app = channel.split("/")[0]
             # Compare tracks
             if track_from_manifest != track_from_deployed_app:
                 LOG.debug(
-                    "Channel track for app {app_name} different in manifest "
+                    f"Channel track for app {app_name} different in manifest "
                     "and actual deployed"
                 )
                 return True
@@ -80,8 +81,8 @@ class LatestInChannel(BaseStep, JujuStepHelper):
         and the deployed app is same, run juju refresh.
         Otherwise ignore so that terraform plan apply will take care of charm upgrade.
         """
-        for app_name, (charm, channel, revision) in apps.items():
-            manifest_charm = self.manifest.software_config.charms.get(charm)
+        for app_name, (charm, channel, _) in apps.items():
+            manifest_charm = self.manifest.software.charms.get(charm)
             if not manifest_charm:
                 continue
 
@@ -121,40 +122,76 @@ class LatestInChannelCoordinator(UpgradeCoordinator):
     """Coordinator for refreshing charms in their current channel."""
 
     def get_plan(self) -> list[BaseStep]:
-        return [
+        plan = [
             LatestInChannel(self.jhelper, self.manifest),
-            TerraformInitStep(self.manifest.get_tfhelper("openstack-plan")),
-            ReapplyOpenStackTerraformPlanStep(self.client, self.manifest, self.jhelper),
-            TerraformInitStep(self.manifest.get_tfhelper("sunbeam-machine-plan")),
+            TerraformInitStep(self.deployment.get_tfhelper("openstack-plan")),
+            ReapplyOpenStackTerraformPlanStep(
+                self.client,
+                self.deployment.get_tfhelper("openstack-plan"),
+                self.jhelper,
+                self.manifest,
+            ),
+            TerraformInitStep(self.deployment.get_tfhelper("sunbeam-machine-plan")),
             DeploySunbeamMachineApplicationStep(
                 self.client,
-                self.manifest,
+                self.deployment.get_tfhelper("sunbeam-machine-plan"),
                 self.jhelper,
+                self.manifest,
                 self.deployment.infrastructure_model,
                 refresh=True,
             ),
-            TerraformInitStep(self.manifest.get_tfhelper("microk8s-plan")),
-            DeployMicrok8sApplicationStep(
-                self.client,
-                self.manifest,
-                self.jhelper,
-                self.deployment.infrastructure_model,
-                refresh=True,
-            ),
-            TerraformInitStep(self.manifest.get_tfhelper("microceph-plan")),
-            DeployMicrocephApplicationStep(
-                self.client,
-                self.manifest,
-                self.jhelper,
-                self.deployment.infrastructure_model,
-                refresh=True,
-            ),
-            TerraformInitStep(self.manifest.get_tfhelper("hypervisor-plan")),
-            ReapplyHypervisorTerraformPlanStep(
-                self.client,
-                self.manifest,
-                self.jhelper,
-                self.deployment.infrastructure_model,
-            ),
-            UpgradePlugins(self.deployment, upgrade_release=False),
         ]
+
+        if self.k8s_provider == "k8s":
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("k8s-plan")),
+                    DeployK8SApplicationStep(
+                        self.client,
+                        self.deployment.get_tfhelper("k8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.infrastructure_model,
+                        refresh=True,
+                    ),
+                ]
+            )
+        else:
+            plan.extend(
+                [
+                    TerraformInitStep(self.deployment.get_tfhelper("microk8s-plan")),
+                    DeployMicrok8sApplicationStep(
+                        self.client,
+                        self.deployment.get_tfhelper("microk8s-plan"),
+                        self.jhelper,
+                        self.manifest,
+                        self.deployment.infrastructure_model,
+                        refresh=True,
+                    ),
+                ]
+            )
+
+        plan.extend(
+            [
+                TerraformInitStep(self.deployment.get_tfhelper("microceph-plan")),
+                DeployMicrocephApplicationStep(
+                    self.client,
+                    self.deployment.get_tfhelper("microceph-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.infrastructure_model,
+                    refresh=True,
+                ),
+                TerraformInitStep(self.deployment.get_tfhelper("hypervisor-plan")),
+                ReapplyHypervisorTerraformPlanStep(
+                    self.client,
+                    self.deployment.get_tfhelper("hypervisor-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    self.deployment.infrastructure_model,
+                ),
+                UpgradePlugins(self.deployment, upgrade_release=False),
+            ]
+        )
+
+        return plan

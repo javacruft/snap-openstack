@@ -31,6 +31,7 @@ from sunbeam.clusterd.service import (
 )
 from sunbeam.jobs.common import read_config
 from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.manifest import SoftwareConfig
 
 LOG = logging.getLogger(__name__)
 PLUGIN_YAML = "plugins.yaml"
@@ -260,18 +261,19 @@ class PluginManager:
         return enabled_plugins
 
     @classmethod
-    def get_all_plugin_manifests(cls, deployment: Deployment) -> dict:
-        manifest = {}
+    def get_all_plugin_manifests(
+        cls, deployment: Deployment
+    ) -> dict[str, SoftwareConfig]:
+        manifests = {}
         plugins = cls.get_all_plugin_classes()
         for klass in plugins:
             plugin = klass(deployment)
-            m_dict = plugin.manifest_defaults()
-            utils.merge_dict(manifest, m_dict)
+            manifests[plugin.name] = plugin.manifest_defaults()
 
-        return manifest
+        return manifests
 
     @classmethod
-    def get_all_plugin_manfiest_tfvar_map(cls, deployment: Deployment) -> dict:
+    def get_all_plugin_manifest_tfvar_map(cls, deployment: Deployment) -> dict:
         tfvar_map = {}
         plugins = cls.get_all_plugin_classes()
         for klass in plugins:
@@ -282,7 +284,9 @@ class PluginManager:
         return tfvar_map
 
     @classmethod
-    def add_manifest_section(cls, deployment: Deployment, software_config) -> None:
+    def add_manifest_section(
+        cls, deployment: Deployment, software_config: SoftwareConfig
+    ) -> None:
         plugins = cls.get_all_plugin_classes()
         for klass in plugins:
             plugin = klass(deployment)

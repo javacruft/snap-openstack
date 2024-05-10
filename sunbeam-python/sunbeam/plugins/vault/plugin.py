@@ -25,6 +25,7 @@ import click
 from packaging.version import Version
 
 from sunbeam.jobs.deployment import Deployment
+from sunbeam.jobs.manifest import CharmManifest, SoftwareConfig
 from sunbeam.plugins.interface.v1.openstack import (
     OpenStackControlPlanePlugin,
     TerraformPlanLocation,
@@ -44,9 +45,11 @@ class VaultPlugin(OpenStackControlPlanePlugin):
             tf_plan_location=TerraformPlanLocation.SUNBEAM_TERRAFORM_REPO,
         )
 
-    def manifest_defaults(self) -> dict:
+    def manifest_defaults(self) -> SoftwareConfig:
         """Manifest pluing part in dict format."""
-        return {"charms": {"vault-k8s": {"channel": VAULT_CHANNEL}}}
+        return SoftwareConfig(
+            charms={"vault-k8s": CharmManifest(channel=VAULT_CHANNEL)}
+        )
 
     def manifest_attributes_tfvar_map(self) -> dict:
         """Manifest attrbitues to terraformvars map."""

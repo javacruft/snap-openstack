@@ -18,6 +18,7 @@ from typing import Optional
 
 from rich.console import Console
 from rich.status import Status
+from snaphelpers import Snap
 
 from sunbeam.clusterd.client import Client
 from sunbeam.jobs.common import BaseStep, Result, ResultType, run_plan
@@ -72,7 +73,7 @@ class UpgradeCoordinator:
         self.client = client
         self.jhelper = jhelper
         self.manifest = manifest
-        self.tfhelper = self.manifest.get_tfhelper("openstack-plan")
+        self.k8s_provider = Snap().config.get("k8s.provider")
 
     def get_plan(self) -> list[BaseStep]:
         """Return the plan for this upgrade.

@@ -50,6 +50,11 @@ from sunbeam.commands.juju import (
     DownloadJujuControllerCharmStep,
     JujuLoginStep,
 )
+from sunbeam.commands.k8s import (
+    AddK8SCloudStep,
+    AddK8SUnitsStep,
+    StoreK8SKubeConfigStep,
+)
 from sunbeam.commands.microceph import (
     AddMicrocephUnitsStep,
     DeployMicrocephApplicationStep,
@@ -86,7 +91,6 @@ from sunbeam.jobs.common import (
     CONTEXT_SETTINGS,
     FORMAT_TABLE,
     FORMAT_YAML,
-    get_proxy_settings,
     get_step_message,
     run_plan,
     run_preflight_checks,
@@ -101,7 +105,7 @@ from sunbeam.jobs.juju import (
     ModelNotFoundException,
     run_sync,
 )
-from sunbeam.jobs.manifest import AddManifestStep, Manifest
+from sunbeam.jobs.manifest import AddManifestStep
 from sunbeam.provider.base import ProviderBase
 from sunbeam.provider.maas.client import (
     MaasClient,
@@ -126,8 +130,10 @@ from sunbeam.provider.maas.steps import (
     MaasAddMachinesToClusterdStep,
     MaasBootstrapJujuStep,
     MaasConfigureMicrocephOSDStep,
+    MaasDeployK8SApplicationStep,
     MaasDeployMachinesStep,
     MaasDeployMicrok8sApplicationStep,
+    MaasEnableK8SFeatures,
     MaasSaveClusterdAddressStep,
     MaasSaveControllerStep,
     MaasScaleJujuStep,
@@ -220,13 +226,14 @@ class MaasProvider(ProviderBase):
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.pass_context
 def bootstrap(
     ctx: click.Context,
-    manifest: Path | None = None,
+    manifest_path: Path | None = None,
     accept_defaults: bool = False,
 ) -> None:
     """Bootstrap the MAAS-backed deployment.
@@ -236,21 +243,11 @@ def bootstrap(
 
     deployment: MaasDeployment = ctx.obj
     # Validate manifest file
-    manifest_obj = None
-    if manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-    else:
-        manifest_obj = Manifest.get_default_manifest(deployment)
+    manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(
-        f"Manifest used for deployment - preseed: {manifest_obj.deployment_config}"
-    )
-    LOG.debug(
-        f"Manifest used for deployment - software: {manifest_obj.software_config}"
-    )
-    preseed = manifest_obj.deployment_config
+    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment}")
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
+    preseed = manifest.deployment
 
     deployments = DeploymentsConfig.load(deployment_path(Snap()))
 
@@ -325,7 +322,7 @@ def bootstrap(
             cloud_definition["clouds"][deployment.name]["type"],
             deployment.controller,
             deployment.juju_account.password,
-            manifest_obj.software_config.juju.bootstrap_args,
+            manifest.software.juju.bootstrap_args,
             deployment_preseed=preseed,
             accept_defaults=accept_defaults,
             proxy_settings=proxy_settings,
@@ -335,7 +332,7 @@ def bootstrap(
         MaasScaleJujuStep(
             maas_client,
             deployment.controller,
-            manifest_obj.software_config.juju.scale_args,
+            manifest.software.juju.scale_args,
         )
     )
     plan.append(
@@ -356,7 +353,7 @@ def bootstrap(
     plan2 = []
     plan2.append(
         DeploySunbeamClusterdApplicationStep(
-            jhelper, manifest_obj, CONTROLLER_MODEL.split("/")[-1]
+            jhelper, manifest, CONTROLLER_MODEL.split("/")[-1]
         )
     )
     plan2.append(MaasSaveClusterdAddressStep(jhelper, deployment.name, deployments))
@@ -370,10 +367,9 @@ def bootstrap(
         sys.exit(1)
 
     client = deployment.get_client()
-    if manifest:
-        plan3 = []
-        plan3.append(AddManifestStep(client))
-        run_plan(plan3, console)
+    plan3 = []
+    plan3.append(AddManifestStep(client, manifest_path))
+    run_plan(plan3, console)
 
     if proxy_from_user and isinstance(proxy_from_user, dict):
         LOG.debug(f"Writing proxy information to clusterdb: {proxy_from_user}")
@@ -391,13 +387,14 @@ def _name_mapper(node: dict) -> str:
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
 @click.pass_context
 def deploy(
     ctx: click.Context,
-    manifest: Path | None = None,
+    manifest_path: Path | None = None,
     accept_defaults: bool = False,
     topology: str = "auto",
 ) -> None:
@@ -406,6 +403,8 @@ def deploy(
     Deploy the sunbeam cluster.
     """
     deployment: MaasDeployment = ctx.obj
+    snap = Snap()
+    k8s_provider = snap.config.get("k8s.provider")
 
     preflight_checks = []
     preflight_checks.append(JujuSnapCheck())
@@ -446,28 +445,21 @@ def deploy(
     preflight_checks.append(NetworkMappingCompleteCheck(deployment))
     run_preflight_checks(preflight_checks, console)
 
-    manifest_obj = None
-    if manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-        run_plan([AddManifestStep(client, manifest)], console)
+    manifest = deployment.get_manifest(manifest_path)
+
+    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment}")
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
+    preseed = manifest.deployment
+    proxy_settings = deployment.get_proxy_settings()
+
+    tfhelper_sunbeam_machine = deployment.get_tfhelper("sunbeam-machine-plan")
+    if k8s_provider == "k8s":
+        tfhelper_k8s = deployment.get_tfhelper("k8s-plan")
     else:
-        manifest_obj = Manifest.load_latest_from_clusterdb(
-            deployment, include_defaults=True
-        )
-
-    manifest: Manifest = manifest_obj  # type: ignore
-    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment_config}")
-    LOG.debug(f"Manifest used for deployment - software: {manifest.software_config}")
-    preseed = manifest.deployment_config
-    proxy_settings = get_proxy_settings(deployment)
-
-    tfhelper_sunbeam_machine = manifest.get_tfhelper("sunbeam-machine-plan")
-    tfhelper_microk8s = manifest.get_tfhelper("microk8s-plan")
-    tfhelper_microceph = manifest.get_tfhelper("microceph-plan")
-    tfhelper_openstack_deploy = manifest.get_tfhelper("openstack-plan")
-    tfhelper_hypervisor_deploy = manifest.get_tfhelper("hypervisor-plan")
+        tfhelper_k8s = deployment.get_tfhelper("microk8s-plan")
+    tfhelper_microceph = deployment.get_tfhelper("microceph-plan")
+    tfhelper_openstack_deploy = deployment.get_tfhelper("openstack-plan")
+    tfhelper_hypervisor_deploy = deployment.get_tfhelper("hypervisor-plan")
 
     plan = []
     plan.append(
@@ -509,8 +501,9 @@ def deploy(
     plan2.append(
         DeploySunbeamMachineApplicationStep(
             client,
-            manifest,
+            tfhelper_sunbeam_machine,
             jhelper,
+            manifest,
             deployment.infrastructure_model,
             refresh=True,
             proxy_settings=proxy_settings,
@@ -521,33 +514,76 @@ def deploy(
             client, workers, jhelper, deployment.infrastructure_model
         )
     )
-    plan2.append(TerraformInitStep(tfhelper_microk8s))
-    plan2.append(
-        MaasDeployMicrok8sApplicationStep(
-            client,
-            maas_client,
-            manifest,
-            jhelper,
-            str(deployment.network_mapping[Networks.PUBLIC.value]),
-            deployment.public_api_label,
-            str(deployment.network_mapping[Networks.INTERNAL.value]),
-            deployment.internal_api_label,
-            deployment.infrastructure_model,
-            preseed,
-            accept_defaults,
+    plan2.append(TerraformInitStep(tfhelper_k8s))
+    if k8s_provider == "k8s":
+        plan2.append(
+            MaasDeployK8SApplicationStep(
+                client,
+                maas_client,
+                tfhelper_k8s,
+                jhelper,
+                manifest,
+                str(deployment.network_mapping[Networks.PUBLIC.value]),
+                deployment.public_api_label,
+                str(deployment.network_mapping[Networks.INTERNAL.value]),
+                deployment.internal_api_label,
+                deployment.infrastructure_model,
+                preseed,
+                accept_defaults,
+            )
         )
-    )
-    plan2.append(
-        AddMicrok8sUnitsStep(client, control, jhelper, deployment.infrastructure_model)
-    )
-    plan2.append(
-        StoreMicrok8sConfigStep(client, jhelper, deployment.infrastructure_model)
-    )
-    plan2.append(AddMicrok8sCloudStep(client, jhelper))
+        plan2.append(
+            AddK8SUnitsStep(client, control, jhelper, deployment.infrastructure_model)
+        )
+        plan2.append(
+            MaasEnableK8SFeatures(
+                client,
+                maas_client,
+                jhelper,
+                str(deployment.network_mapping[Networks.PUBLIC.value]),
+                deployment.public_api_label,
+                deployment.infrastructure_model,
+            )
+        )
+        plan2.append(
+            StoreK8SKubeConfigStep(client, jhelper, deployment.infrastructure_model)
+        )
+        plan2.append(AddK8SCloudStep(client, jhelper))
+    else:
+        plan2.append(
+            MaasDeployMicrok8sApplicationStep(
+                client,
+                maas_client,
+                tfhelper_k8s,
+                jhelper,
+                manifest,
+                str(deployment.network_mapping[Networks.PUBLIC.value]),
+                deployment.public_api_label,
+                str(deployment.network_mapping[Networks.INTERNAL.value]),
+                deployment.internal_api_label,
+                deployment.infrastructure_model,
+                preseed,
+                accept_defaults,
+            )
+        )
+        plan2.append(
+            AddMicrok8sUnitsStep(
+                client, control, jhelper, deployment.infrastructure_model
+            )
+        )
+        plan2.append(
+            StoreMicrok8sConfigStep(client, jhelper, deployment.infrastructure_model)
+        )
+        plan2.append(AddMicrok8sCloudStep(client, jhelper))
+
     plan2.append(TerraformInitStep(tfhelper_microceph))
     plan2.append(
         DeployMicrocephApplicationStep(
-            client, manifest, jhelper, deployment.infrastructure_model
+            client,
+            tfhelper_microceph,
+            jhelper,
+            manifest,
+            deployment.infrastructure_model,
         )
     )
     plan2.append(
@@ -566,8 +602,9 @@ def deploy(
     plan2.append(
         DeployControlPlaneStep(
             client,
-            manifest,
+            tfhelper_openstack_deploy,
             jhelper,
+            manifest,
             topology,
             # maas deployment always deploys multiple databases
             "large",
@@ -581,8 +618,10 @@ def deploy(
     plan2.append(
         DeployHypervisorApplicationStep(
             client,
-            manifest,
+            tfhelper_hypervisor_deploy,
+            tfhelper_openstack_deploy,
             jhelper,
+            manifest,
             deployment.infrastructure_model,
         )
     )
@@ -607,6 +646,7 @@ def deploy(
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
@@ -619,7 +659,7 @@ def deploy(
 def configure_cmd(
     ctx: click.Context,
     openrc: Path | None = None,
-    manifest: Path | None = None,
+    manifest_path: Path | None = None,
     accept_defaults: bool = False,
 ) -> None:
 
@@ -632,23 +672,11 @@ def configure_cmd(
     run_preflight_checks(preflight_checks, console)
 
     # Validate manifest file
-    manifest_obj = None
-    if manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-    else:
-        manifest_obj = Manifest.load_latest_from_clusterdb(
-            deployment, include_defaults=True
-        )
+    manifest = deployment.get_manifest(manifest_path)
 
-    LOG.debug(
-        f"Manifest used for deployment - preseed: {manifest_obj.deployment_config}"
-    )
-    LOG.debug(
-        f"Manifest used for deployment - software: {manifest_obj.software_config}"
-    )
-    preseed = manifest_obj.deployment_config or {}
+    LOG.debug(f"Manifest used for deployment - preseed: {manifest.deployment}")
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
+    preseed = manifest.deployment or {}
 
     jhelper = JujuHelper(deployment.get_connected_controller())
     try:
@@ -661,7 +689,7 @@ def configure_cmd(
     admin_credentials["OS_INSECURE"] = "true"
 
     tfplan = "demo-setup"
-    tfhelper = manifest_obj.get_tfhelper(tfplan)
+    tfhelper = deployment.get_tfhelper(tfplan)
     tfhelper.env = (tfhelper.env or {}) | admin_credentials
     answer_file = tfhelper.path / "config.auto.tfvars.json"
     compute = list(

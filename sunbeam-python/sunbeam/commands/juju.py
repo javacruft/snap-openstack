@@ -73,10 +73,10 @@ class JujuStepHelper:
         do not need to worry about the format or the juju command that should
         be used.
 
-        For example, to run the juju bootstrap microk8s, this method should
+        For example, to run the juju bootstrap k8s, this method should
         be invoked as:
 
-          self._juju_cmd('bootstrap', 'microk8s')
+          self._juju_cmd('bootstrap', 'k8s')
 
         Any results from running with json are returned after being parsed.
         Subprocess execution errors are raised to the calling code.

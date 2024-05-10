@@ -22,12 +22,13 @@ from rich.status import Status
 from sunbeam.clusterd.client import Client
 from sunbeam.commands.hypervisor import CONFIG_KEY as HYPERVISOR_CONFIG_KEY
 from sunbeam.commands.juju import JujuStepHelper
+from sunbeam.commands.k8s import K8S_CONFIG_KEY
 from sunbeam.commands.microceph import CONFIG_KEY as MICROCEPH_CONFIG_KEY
 from sunbeam.commands.microk8s import MICROK8S_CONFIG_KEY
 from sunbeam.commands.openstack import CONFIG_KEY as OPENSTACK_CONFIG_KEY
 from sunbeam.commands.openstack import OPENSTACK_DEPLOY_TIMEOUT
 from sunbeam.commands.sunbeam_machine import CONFIG_KEY as SUNBEAM_MACHINE_CONFIG_KEY
-from sunbeam.commands.terraform import TerraformException
+from sunbeam.commands.terraform import TerraformException, TerraformHelper
 from sunbeam.commands.upgrades.base import UpgradeCoordinator, UpgradePlugins
 from sunbeam.jobs.common import (
     BaseStep,
@@ -100,7 +101,7 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         apps: List[str],
         charms: List[str],
         model: str,
-        tfplan: str,
+        tfhelper: TerraformHelper,
         config: str,
         timeout: int,
         status: Optional[Status] = None,
@@ -110,16 +111,18 @@ class BaseUpgrade(BaseStep, JujuStepHelper):
         :param apps: List of applications to be upgraded
         :param charms: List of charms
         :param model: Name of model
-        :param tfplan: Name of plan
+        :param tfhelper: Tfhelper of associated plan
         :param config: Terraform config key used to store config in clusterdb
         :param timeout: Timeout to wait for apps in expected status
         :param status: Status object to update charm status
         """
         expected_wls = ["active", "blocked", "unknown"]
-        LOG.debug(f"Upgrading applications using terraform plan {tfplan}: {apps}")
+        LOG.debug(
+            f"Upgrading applications using terraform plan {tfhelper.plan}: {apps}"
+        )
         try:
-            self.manifest.update_partial_tfvars_and_apply_tf(
-                self.client, charms, tfplan, config
+            tfhelper.update_partial_tfvars_and_apply_tf(
+                self.client, self.manifest, charms, config
             )
         except TerraformException as e:
             LOG.exception("Error upgrading cloud")
@@ -150,6 +153,7 @@ class UpgradeControlPlane(BaseUpgrade):
         self,
         deployment: Deployment,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -170,7 +174,7 @@ class UpgradeControlPlane(BaseUpgrade):
             model,
         )
         self.deployment = deployment
-        self.tfplan = "openstack-plan"
+        self.tfhelper = tfhelper
         self.config = OPENSTACK_CONFIG_KEY
 
     def upgrade_tasks(self, status: Optional[Status] = None) -> Result:
@@ -179,7 +183,7 @@ class UpgradeControlPlane(BaseUpgrade):
         charms = list(MYSQL_CHARMS_K8S.keys())
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
-            apps, charms, self.model, self.tfplan, self.config, 1200, status
+            apps, charms, self.model, self.tfhelper, self.config, 1200, status
         )
         if result.result_type == ResultType.FAILED:
             return result
@@ -196,7 +200,7 @@ class UpgradeControlPlane(BaseUpgrade):
             apps,
             charms,
             self.model,
-            self.tfplan,
+            self.tfhelper,
             self.config,
             OPENSTACK_DEPLOY_TIMEOUT,
             status,
@@ -206,13 +210,14 @@ class UpgradeControlPlane(BaseUpgrade):
 
         # Step 3: Upgrade all plugins that uses openstack-plan
         LOG.debug("Upgrading openstack plugins that are enabled")
+        # TODO(gboutry): We have a loaded manifest, can't we get charms from there ?
         charms = PluginManager().get_all_charms_in_openstack_plan(self.deployment)
         apps = self.get_apps_filter_by_charms(self.model, charms)
         result = self.upgrade_applications(
             apps,
             charms,
             self.model,
-            self.tfplan,
+            self.tfhelper,
             self.config,
             OPENSTACK_DEPLOY_TIMEOUT,
             status,
@@ -226,11 +231,11 @@ class UpgradeMachineCharm(BaseUpgrade):
         name: str,
         description: str,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
         charms: list,
-        tfplan: str,
         config: str,
         timeout: int,
     ):
@@ -253,7 +258,7 @@ class UpgradeMachineCharm(BaseUpgrade):
             model,
         )
         self.charms = charms
-        self.tfplan = tfplan
+        self.tfhelper = tfhelper
         self.config = config
         self.timeout = timeout
 
@@ -263,7 +268,7 @@ class UpgradeMachineCharm(BaseUpgrade):
             apps,
             self.charms,
             self.model,
-            self.tfplan,
+            self.tfhelper,
             self.config,
             self.timeout,
             status,
@@ -276,6 +281,7 @@ class UpgradeMicrocephCharm(UpgradeMachineCharm):
     def __init__(
         self,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -291,11 +297,11 @@ class UpgradeMicrocephCharm(UpgradeMachineCharm):
             "Upgrade Microceph charm",
             "Upgrading microceph charm",
             client,
+            tfhelper,
             jhelper,
             manifest,
             model,
             ["microceph"],
-            "microceph-plan",
             MICROCEPH_CONFIG_KEY,
             1200,
         )
@@ -305,6 +311,7 @@ class UpgradeMicrok8sCharm(UpgradeMachineCharm):
     def __init__(
         self,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -318,14 +325,44 @@ class UpgradeMicrok8sCharm(UpgradeMachineCharm):
         """
         super().__init__(
             "Upgrade Microk8s charm",
-            "Upgrading microk8s charm",
+            "Upgrading Microk8s charm",
             client,
+            tfhelper,
             jhelper,
             manifest,
             model,
             ["microk8s"],
-            "microk8s-plan",
             MICROK8S_CONFIG_KEY,
+            1200,
+        )
+
+
+class UpgradeK8SCharm(UpgradeMachineCharm):
+    def __init__(
+        self,
+        client: Client,
+        tfhelper: TerraformHelper,
+        jhelper: JujuHelper,
+        manifest: Manifest,
+        model: str,
+    ):
+        """Create instance of UpgradeK8SCharm class.
+
+        :client: Client to connect to clusterdb
+        :jhelper: Helper for interacting with pylibjuju
+        :manifest: Manifest object
+        :model: Name of model containing charms.
+        """
+        super().__init__(
+            "Upgrade K8S charm",
+            "Upgrading K8S charm",
+            client,
+            tfhelper,
+            jhelper,
+            manifest,
+            model,
+            ["k8s"],
+            K8S_CONFIG_KEY,
             1200,
         )
 
@@ -334,6 +371,7 @@ class UpgradeOpenstackHypervisorCharm(UpgradeMachineCharm):
     def __init__(
         self,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -349,11 +387,11 @@ class UpgradeOpenstackHypervisorCharm(UpgradeMachineCharm):
             "Upgrade hypervisor charm",
             "Upgrading hypervisor charm",
             client,
+            tfhelper,
             jhelper,
             manifest,
             model,
             ["openstack-hypervisor"],
-            "hypervisor-plan",
             HYPERVISOR_CONFIG_KEY,
             1200,
         )
@@ -363,6 +401,7 @@ class UpgradeSunbeamMachineCharm(UpgradeMachineCharm):
     def __init__(
         self,
         client: Client,
+        tfhelper: TerraformHelper,
         jhelper: JujuHelper,
         manifest: Manifest,
         model: str,
@@ -378,62 +417,81 @@ class UpgradeSunbeamMachineCharm(UpgradeMachineCharm):
             "Upgrade sunbeam-machine charm",
             "Upgrading sunbeam-machine charm",
             client,
+            tfhelper,
             jhelper,
             manifest,
             model,
             ["sunbeam-machine"],
-            "sunbeam-machine-plan",
             SUNBEAM_MACHINE_CONFIG_KEY,
             1200,
         )
 
 
 class ChannelUpgradeCoordinator(UpgradeCoordinator):
-    def __init__(
-        self,
-        deployment: Deployment,
-        client: Client,
-        jhelper: JujuHelper,
-        manifest: Manifest,
-    ):
-        """Upgrade coordinator.
-
-        Execute plan for conducting an upgrade.
-
-        :deployment: Deployment instance
-        :client: Client for interacting with clusterd
-        :jhelper: Helper for interacting with pylibjuju
-        :manifest: Manifest object
-        """
-        self.deployment = deployment
-        self.client = client
-        self.jhelper = jhelper
-        self.manifest = manifest
-
     def get_plan(self) -> list[BaseStep]:
         """Return the plan for this upgrade.
 
         Return the steps to complete this upgrade.
         """
+        get_tf = self.deployment.get_tfhelper
         plan = [
             ValidationCheck(self.jhelper, self.manifest),
             UpgradeControlPlane(
-                self.deployment, self.client, self.jhelper, self.manifest, "openstack"
+                self.deployment,
+                self.client,
+                get_tf("openstack-plan"),
+                self.jhelper,
+                self.manifest,
+                "openstack",
             ),
             UpgradeMicrocephCharm(
-                self.client, self.jhelper, self.manifest, "controller"
+                self.client,
+                get_tf("microceph-plan"),
+                self.jhelper,
+                self.manifest,
+                "controller",
             ),
-            UpgradeMicrok8sCharm(
-                self.client, self.jhelper, self.manifest, "controller"
-            ),
-            UpgradeOpenstackHypervisorCharm(
-                self.client, self.jhelper, self.manifest, "controller"
-            ),
-            UpgradeSunbeamMachineCharm(
-                self.client, self.jhelper, self.manifest, "controller"
-            ),
-            UpgradePlugins(self.deployment, upgrade_release=True),
         ]
+        if self.k8s_provider == "k8s":
+            plan.append(
+                UpgradeK8SCharm(
+                    self.client,
+                    get_tf("k8s-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    "controller",
+                )
+            )
+        else:
+            plan.append(
+                UpgradeMicrok8sCharm(
+                    self.client,
+                    get_tf("microk8s-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    "controller",
+                )
+            )
+
+        plan.extend(
+            [
+                UpgradeOpenstackHypervisorCharm(
+                    self.client,
+                    get_tf("openstack-hypervisor-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    "controller",
+                ),
+                UpgradeSunbeamMachineCharm(
+                    self.client,
+                    get_tf("sunbeam-machine-plan"),
+                    self.jhelper,
+                    self.manifest,
+                    "controller",
+                ),
+                UpgradePlugins(self.deployment, upgrade_release=True),
+            ]
+        )
         return plan
 
     def run_plan(self) -> None:

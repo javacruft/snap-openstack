@@ -28,7 +28,6 @@ from sunbeam.commands.openstack import OPENSTACK_MODEL
 from sunbeam.commands.terraform import TerraformException
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper, ModelNotFoundException, run_sync
-from sunbeam.jobs.manifest import Manifest
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -62,7 +61,6 @@ def launch(
     data_location = snap.paths.user_data
     deployment: Deployment = ctx.obj
     jhelper = JujuHelper(deployment.get_connected_controller())
-    manifest = Manifest.load_latest_from_clusterdb(deployment, include_defaults=True)
     with console.status("Fetching user credentials ... "):
         try:
             run_sync(jhelper.get_model(OPENSTACK_MODEL))
@@ -73,7 +71,7 @@ def launch(
         admin_auth_info = retrieve_admin_credentials(jhelper, OPENSTACK_MODEL)
 
         tfplan = "demo-setup"
-        tfhelper = manifest.get_tfhelper(tfplan)
+        tfhelper = deployment.get_tfhelper(tfplan)
         try:
             tf_output = tfhelper.output(hide_output=True)
         except TerraformException:

@@ -24,7 +24,7 @@ from sunbeam.commands.upgrades.intra_channel import LatestInChannelCoordinator
 from sunbeam.jobs.common import run_plan
 from sunbeam.jobs.deployment import Deployment
 from sunbeam.jobs.juju import JujuHelper
-from sunbeam.jobs.manifest import AddManifestStep, Manifest
+from sunbeam.jobs.manifest import AddManifestStep
 
 LOG = logging.getLogger(__name__)
 console = Console()
@@ -42,6 +42,7 @@ console = Console()
 @click.option(
     "-m",
     "--manifest",
+    "manifest_path",
     help="Manifest file.",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
@@ -56,7 +57,7 @@ console = Console()
 def refresh(
     ctx: click.Context,
     upgrade_release: bool,
-    manifest: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
     clear_manifest: bool = False,
 ) -> None:
     """Refresh deployment.
@@ -64,7 +65,7 @@ def refresh(
     Refresh the deployment. If --upgrade-release is supplied then charms are
     upgraded the channels aligned with this snap revision
     """
-    if clear_manifest and manifest:
+    if clear_manifest and manifest_path:
         raise click.ClickException(
             "Options manifest and clear_manifest are mutually exclusive"
         )
@@ -72,29 +73,23 @@ def refresh(
     deployment: Deployment = ctx.obj
     client = deployment.get_client()
     # Validate manifest file
-    manifest_obj = None
+    manifest = None
     if clear_manifest:
-        run_plan([AddManifestStep(client)], console)
-    elif manifest:
-        manifest_obj = Manifest.load(
-            deployment, manifest_file=manifest, include_defaults=True
-        )
-        run_plan([AddManifestStep(client, manifest)], console)
+        run_plan([AddManifestStep(client, clear=True)], console)
+    elif manifest_path:
+        manifest = deployment.get_manifest(manifest_path)
+        run_plan([AddManifestStep(client, manifest_path)], console)
 
-    if not manifest_obj:
+    if not manifest:
         LOG.debug("Getting latest manifest from cluster db")
-        manifest_obj = Manifest.load_latest_from_clusterdb(
-            deployment, include_defaults=True
-        )
+        manifest = deployment.get_manifest()
 
-    LOG.debug(
-        f"Manifest used for deployment - software: {manifest_obj.software_config}"
-    )
+    LOG.debug(f"Manifest used for deployment - software: {manifest.software}")
     jhelper = JujuHelper(deployment.get_connected_controller())
     if upgrade_release:
-        a = ChannelUpgradeCoordinator(deployment, client, jhelper, manifest_obj)
+        a = ChannelUpgradeCoordinator(deployment, client, jhelper, manifest)
         a.run_plan()
     else:
-        a = LatestInChannelCoordinator(deployment, client, jhelper, manifest_obj)
+        a = LatestInChannelCoordinator(deployment, client, jhelper, manifest)
         a.run_plan()
     click.echo("Refresh complete.")

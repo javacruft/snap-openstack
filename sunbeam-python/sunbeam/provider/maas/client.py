@@ -167,8 +167,7 @@ def _convert_raw_machine(machine_raw: dict) -> dict:
                 root_disk = _to_root_disk(blockdevice)
 
         for partition in blockdevice.get("partitions", []):
-            fs = partition.get("filesystem")
-            if fs.get("label") == "root":
+            if (fs := partition.get("filesystem")) and fs.get("label") == "root":
                 root_disk = _to_root_disk(blockdevice, partition)
 
     spaces = []
