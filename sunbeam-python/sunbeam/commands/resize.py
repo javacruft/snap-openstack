@@ -18,6 +18,10 @@ import click
 from rich.console import Console
 
 from sunbeam.clusterd.client import Client
+from sunbeam.commands.microceph import (
+    DeployMicrocephApplicationStep,
+    SetCephMgrPoolSizeStep,
+)
 from sunbeam.commands.openstack import DeployControlPlaneStep
 from sunbeam.commands.terraform import TerraformInitStep
 from sunbeam.jobs.common import click_option_topology, run_plan
@@ -39,24 +43,51 @@ def resize(ctx: click.Context, topology: str, force: bool = False) -> None:
     """Expand the control plane to fit available nodes."""
     deployment: Deployment = ctx.obj
     client: Client = deployment.get_client()
-    manifest_obj = Manifest.load_latest_from_clusterdb(
-        deployment, include_defaults=True
-    )
+    manifest = Manifest.load_latest_from_clusterdb(deployment, include_defaults=True)
 
-    tfplan = "openstack-plan"
+    openstack_tfhelper = deployment.get_tfhelper("openstack-plan")
+    microceph_tfhelper = deployment.get_tfhelper("microceph-plan")
     jhelper = JujuHelper(deployment.get_connected_controller())
-    plan = [
-        TerraformInitStep(manifest_obj.get_tfhelper(tfplan)),
-        DeployControlPlaneStep(
-            client,
-            manifest_obj,
-            jhelper,
-            topology,
-            "auto",
-            deployment.infrastructure_model,
-            force=force,
-        ),
-    ]
+
+    storage_nodes = client.cluster.list_nodes_by_role("storage")
+
+    plan = []
+    if len(storage_nodes):
+        # Change default-pool-size based on number of storage nodes
+        plan.extend(
+            [
+                TerraformInitStep(microceph_tfhelper),
+                DeployMicrocephApplicationStep(
+                    client,
+                    microceph_tfhelper,
+                    jhelper,
+                    manifest,
+                    deployment.infrastructure_model,
+                    refresh=True,
+                ),
+                SetCephMgrPoolSizeStep(
+                    client,
+                    jhelper,
+                    deployment.infrastructure_model,
+                ),
+            ]
+        )
+
+    plan.extend(
+        [
+            TerraformInitStep(openstack_tfhelper),
+            DeployControlPlaneStep(
+                client,
+                openstack_tfhelper,
+                jhelper,
+                manifest,
+                topology,
+                "auto",
+                deployment.infrastructure_model,
+                force=force,
+            ),
+        ]
+    )
 
     run_plan(plan, console)
 

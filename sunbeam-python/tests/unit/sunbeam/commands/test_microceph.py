@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import asyncio
-import unittest
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from sunbeam.commands.microceph import ConfigureMicrocephOSDStep
+from sunbeam.commands.microceph import ConfigureMicrocephOSDStep, SetCephMgrPoolSizeStep
 from sunbeam.jobs.common import ResultType
 from sunbeam.jobs.juju import ActionFailedException
 
@@ -38,46 +37,76 @@ def mock_run_sync(mocker):
     loop.close()
 
 
-class TestConfigureMicrocephOSDStep(unittest.TestCase):
-    def __init__(self, methodName: str = "runTest") -> None:
-        super().__init__(methodName)
+@pytest.fixture()
+def cclient():
+    yield Mock()
 
-    def setUp(self):
-        self.client = Mock()
-        self.jhelper = AsyncMock()
-        self.name = "test-0"
 
-    def test_is_skip(self):
-        step = ConfigureMicrocephOSDStep(
-            self.client, self.name, self.jhelper, "test-model"
-        )
+@pytest.fixture()
+def jhelper():
+    yield AsyncMock()
+
+
+class TestConfigureMicrocephOSDStep:
+    def test_is_skip(self, cclient, jhelper):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.is_skip()
 
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run(self):
-        step = ConfigureMicrocephOSDStep(
-            self.client, self.name, self.jhelper, "test-model"
-        )
+    def test_run(self, cclient, jhelper):
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.run()
 
-        self.jhelper.run_action.assert_called_once()
+        jhelper.run_action.assert_called_once()
         assert result.result_type == ResultType.COMPLETED
 
-    def test_run_action_failed(self):
-        self.jhelper.run_action.side_effect = ActionFailedException("Action failed...")
+    def test_run_action_failed(self, cclient, jhelper):
+        jhelper.run_action.side_effect = ActionFailedException("Action failed...")
 
-        step = ConfigureMicrocephOSDStep(
-            self.client, self.name, self.jhelper, "test-model"
-        )
+        step = ConfigureMicrocephOSDStep(cclient, "test-0", jhelper, "test-model")
         step.disks = "/dev/sdb,/dev/sdc"
         result = step.run()
 
-        self.jhelper.run_action.assert_called_once()
+        jhelper.run_action.assert_called_once()
         expected_message = (
             f"Microceph Adding disks {step.disks} failed: Action failed..."
         )
+        assert result.result_type == ResultType.FAILED
+        assert result.message == expected_message
+
+
+class TestSetCephMgrPoolSizeStep:
+    def test_is_skip(self, cclient, jhelper):
+        cclient.cluster.list_nodes_by_role.return_value = []
+        step = SetCephMgrPoolSizeStep(cclient, jhelper, "test-model")
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.SKIPPED
+
+    def test_is_skip_with_storage_nodes(self, cclient, jhelper):
+        cclient.cluster.list_nodes_by_role.return_value = ["sunbeam1"]
+        step = SetCephMgrPoolSizeStep(cclient, jhelper, "test-model")
+        result = step.is_skip()
+
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run(self, cclient, jhelper):
+        step = SetCephMgrPoolSizeStep(cclient, jhelper, "test-model")
+        result = step.run()
+
+        jhelper.run_action.assert_called_once()
+        assert result.result_type == ResultType.COMPLETED
+
+    def test_run_action_failed(self, cclient, jhelper):
+        jhelper.run_action.side_effect = ActionFailedException("Action failed...")
+
+        step = SetCephMgrPoolSizeStep(cclient, jhelper, "test-model")
+        result = step.run()
+
+        jhelper.run_action.assert_called_once()
+        expected_message = "Action failed..."
         assert result.result_type == ResultType.FAILED
         assert result.message == expected_message

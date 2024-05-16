@@ -98,17 +98,6 @@ def compute_ingress_scale(topology: str, control_nodes: int) -> int:
     return min(control_nodes, 3)
 
 
-def compute_ceph_replica_scale(osds: int) -> int:
-    return min(osds, 3)
-
-
-async def _get_number_of_osds(jhelper: JujuHelper, model: str) -> int:
-    """Fetch the number of osds from the microceph application"""
-    leader = await jhelper.get_leader_unit(microceph.APPLICATION, model)
-    osds, _ = await microceph.list_disks(jhelper, model, leader)
-    return len(osds)
-
-
 class DeployControlPlaneStep(BaseStep, JujuStepHelper):
     """Deploy OpenStack using Terraform cloud"""
 
@@ -149,8 +138,8 @@ class DeployControlPlaneStep(BaseStep, JujuStepHelper):
             tfvars["ceph-offer-url"] = (
                 f"admin/{self.machine_model}.{microceph.APPLICATION}"
             )
-            tfvars["ceph-osd-replication-count"] = compute_ceph_replica_scale(
-                run_sync(_get_number_of_osds(self.jhelper, self.machine_model))
+            tfvars["ceph-osd-replication-count"] = microceph.ceph_replica_scale(
+                len(storage_nodes)
             )
         else:
             tfvars["enable-ceph"] = False
