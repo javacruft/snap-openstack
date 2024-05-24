@@ -26,7 +26,9 @@ from sunbeam.jobs import questions
 from sunbeam.jobs.common import BaseStep, Result, ResultType
 from sunbeam.jobs.juju import (
     ActionFailedException,
+    ApplicationNotFoundException,
     JujuHelper,
+    LeaderNotFoundException,
     UnitNotFoundException,
     run_sync,
 )
@@ -71,6 +73,10 @@ async def list_disks(jhelper: JujuHelper, model: str, unit: str) -> tuple[dict, 
     return osds, unpartitioned_disks
 
 
+def ceph_replica_scale(storage_nodes: int) -> int:
+    return min(storage_nodes, 3)
+
+
 class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
     """Deploy Microceph application using Terraform"""
 
@@ -97,6 +103,17 @@ class DeployMicrocephApplicationStep(DeployMachineApplicationStep):
 
     def get_application_timeout(self) -> int:
         return MICROCEPH_APP_TIMEOUT
+
+    def extra_tfvars(self) -> dict:
+        storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        if len(storage_nodes):
+            return {
+                "charm_microceph_config": {
+                    "default-pool-size": ceph_replica_scale(len(storage_nodes))
+                }
+            }
+
+        return {}
 
 
 class AddMicrocephUnitsStep(AddMachineUnitsStep):
@@ -159,7 +176,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
     ):
         super().__init__("Configure MicroCeph storage", "Configuring MicroCeph storage")
         self.client = client
-        self.name = name
+        self.node_name = name
         self.jhelper = jhelper
         self.model = model
         self.preseed = deployment_preseed
@@ -182,7 +199,7 @@ class ConfigureMicrocephOSDStep(BaseStep):
 
     def get_all_disks(self) -> None:
         try:
-            node = self.client.cluster.get_node_info(self.name)
+            node = self.client.cluster.get_node_info(self.node_name)
             self.machine_id = str(node.get("machineid"))
             unit = run_sync(
                 self.jhelper.get_unit_from_machine(
@@ -213,30 +230,40 @@ class ConfigureMicrocephOSDStep(BaseStep):
         self.get_all_disks()
         self.variables = questions.load_answers(self.client, self._CONFIG)
         self.variables.setdefault("microceph_config", {})
-        self.variables["microceph_config"].setdefault(self.name, {"osd_devices": None})
+        self.variables["microceph_config"].setdefault(
+            self.node_name, {"osd_devices": None}
+        )
 
         # Set defaults
         self.preseed.setdefault("microceph_config", {})
-        self.preseed["microceph_config"].setdefault(self.name, {"osd_devices": None})
+        self.preseed["microceph_config"].setdefault(
+            self.node_name, {"osd_devices": None}
+        )
 
         # Preseed can have osd_devices as list. If so, change to comma separated str
         osd_devices = (
-            self.preseed.get("microceph_config").get(self.name).get("osd_devices")
+            self.preseed.get("microceph_config", {})
+            .get(self.node_name, {})
+            .get("osd_devices")
         )
         if isinstance(osd_devices, list):
             osd_devices_str = ",".join(osd_devices)
-            self.preseed["microceph_config"][self.name]["osd_devices"] = osd_devices_str
+            self.preseed["microceph_config"][self.node_name][
+                "osd_devices"
+            ] = osd_devices_str
 
         microceph_config_bank = questions.QuestionBank(
             questions=self.microceph_config_questions(),
             console=console,  # type: ignore
-            preseed=self.preseed.get("microceph_config").get(self.name),
-            previous_answers=self.variables.get("microceph_config").get(self.name),
+            preseed=self.preseed.get("microceph_config", {}).get(self.node_name),
+            previous_answers=self.variables.get("microceph_config", {}).get(
+                self.node_name
+            ),
             accept_defaults=self.accept_defaults,
         )
         # Microceph configuration
         self.disks = microceph_config_bank.osd_devices.ask()
-        self.variables["microceph_config"][self.name]["osd_devices"] = self.disks
+        self.variables["microceph_config"][self.node_name]["osd_devices"] = self.disks
 
         LOG.debug(self.variables)
         questions.write_answers(self.client, self._CONFIG, self.variables)
@@ -295,5 +322,62 @@ class ConfigureMicrocephOSDStep(BaseStep):
             message = f"Microceph Adding disks {self.disks} failed: {str(e)}"
             LOG.debug(message)
             return Result(ResultType.FAILED, message)
+
+        return Result(ResultType.COMPLETED)
+
+
+class SetCephMgrPoolSizeStep(BaseStep):
+    """Configure Microceph pool size for mgr"""
+
+    def __init__(self, client: Client, jhelper: JujuHelper, model: str):
+        super().__init__(
+            "Set Microceph mgr Pool size",
+            "Setting Microceph mgr pool size",
+        )
+        self.client = client
+        self.jhelper = jhelper
+        self.model = model
+        self.storage_nodes = []
+
+    def is_skip(self, status: Status | None = None) -> Result:
+        """Determines if the step should be skipped or not.
+
+        :return: ResultType.SKIPPED if the Step should be skipped,
+                ResultType.COMPLETED or ResultType.FAILED otherwise
+        """
+        self.storage_nodes = self.client.cluster.list_nodes_by_role("storage")
+        if len(self.storage_nodes):
+            return Result(ResultType.COMPLETED)
+
+        return Result(ResultType.SKIPPED)
+
+    def run(self, status: Optional[Status] = None) -> Result:
+        """Set ceph mgr pool size."""
+        try:
+            unit = run_sync(self.jhelper.get_leader_unit(APPLICATION, self.model))
+            action_params = {
+                "pools": ".mgr",
+                "size": ceph_replica_scale(len(self.storage_nodes)),
+            }
+            LOG.debug(
+                f"Running microceph action set-pool-size with params {action_params}"
+            )
+            result = run_sync(
+                self.jhelper.run_action(
+                    unit, self.model, "set-pool-size", action_params
+                )
+            )
+            if result.get("status") is None:
+                return Result(
+                    ResultType.FAILED,
+                    "ERROR: Failed to update pool size for .mgr",
+                )
+        except (
+            ApplicationNotFoundException,
+            LeaderNotFoundException,
+            ActionFailedException,
+        ) as e:
+            LOG.debug("Failed to update pool size for .mgr", exc_info=True)
+            return Result(ResultType.FAILED, str(e))
 
         return Result(ResultType.COMPLETED)
