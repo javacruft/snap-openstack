@@ -481,7 +481,7 @@ class ChannelUpgradeCoordinator(UpgradeCoordinator):
             [
                 UpgradeOpenstackHypervisorCharm(
                     self.client,
-                    get_tf("openstack-hypervisor-plan"),
+                    get_tf("hypervisor-plan"),
                     self.jhelper,
                     self.manifest,
                     "controller",
